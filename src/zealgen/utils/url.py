@@ -17,6 +17,10 @@ def normalize_url(url: str) -> str:
     path = parsed.path.rstrip("/")
     if not path:
         path = ""
+    
+    query = parsed.query
+    if query:
+        return f"{netloc}{path}?{query}".lower()
         
     return f"{netloc}{path}".lower()
 
@@ -32,6 +36,12 @@ def get_filename_from_url(url: str) -> str:
     # Remove leading slash
     if path.startswith("/"):
         path = path[1:]
+    
+    query = parsed.query
+    if query:
+        # Replace characters that are not safe for filenames in query
+        safe_query = query.replace("=", "_").replace("&", "_").replace("?", "_")
+        path = f"{path}_{safe_query}"
         
     if domain:
         full_path = f"{domain}/{path}"

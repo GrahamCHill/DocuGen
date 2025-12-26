@@ -37,9 +37,10 @@ async def scan(urls, js=False, max_pages=10, progress_callback=None, fetcher_typ
 
     while queue and pages_count < max_pages:
         url = queue.pop(0)
-        if url in visited:
+        norm_url = normalize_url(url)
+        if norm_url in visited:
             continue
-        visited.add(url)
+        visited.add(norm_url)
         discovered.add(url)
         
         if progress_callback:
@@ -69,8 +70,9 @@ async def scan(urls, js=False, max_pages=10, progress_callback=None, fetcher_typ
         for a in soup.find_all("a", href=True):
             next_url = urljoin(url, a["href"])
             clean_url = next_url.split("#")[0]
+            norm_url = normalize_url(clean_url)
             
-            if clean_url not in visited and clean_url not in queue:
+            if norm_url not in visited and norm_url not in queue:
                 # For scanning, we might want to be a bit more liberal or just collect all
                 # but let's stick to a reasonable depth/heuristic for now
                 discovered.add(clean_url)
@@ -101,13 +103,14 @@ async def generate(urls, output, js=False, max_pages=100, progress_callback=None
 
     while queue and pages_count < max_pages:
         url = queue.pop(0)
-        if url in visited:
+        norm_url = normalize_url(url)
+        if norm_url in visited:
             continue
         
-        if allowed_urls and normalize_url(url) not in allowed_urls:
+        if allowed_urls and norm_url not in allowed_urls:
             continue
 
-        visited.add(url)
+        visited.add(norm_url)
         
         if progress_callback:
             progress_callback(pages_count, max_pages)
@@ -159,7 +162,7 @@ async def generate(urls, output, js=False, max_pages=100, progress_callback=None
                 # Use normalized URL for checking visited/queue to be consistent
                 norm_clean_url = normalize_url(clean_url)
                 # But we still need the actual URL to fetch it
-                if clean_url not in visited and clean_url not in queue:
+                if norm_clean_url not in visited and norm_clean_url not in queue:
                      if not allowed_urls or norm_clean_url in allowed_urls:
                         queue.append(clean_url)
         
