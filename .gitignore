@@ -1,0 +1,8 @@
+/.idea
+*.docset
+/src/zealgen/__pycache__
+/src/zealgen/docset/__pycache__
+/src/zealgen/fetch/__pycache__
+/src/zealgen/parsers/__pycache__
+/src/zealgen/utils/__pycache__
+/test/

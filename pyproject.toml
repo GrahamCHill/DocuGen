@@ -1,0 +1,25 @@
+[project]
+name = "zealgen"
+version = "0.1.0"
+description = "Qt6 tool to generate Zeal docsets from URLs"
+requires-python = ">=3.11"
+
+dependencies = [
+    "pyside6>=6.7",
+    "requests",
+    "beautifulsoup4",
+    "lxml",
+    "httpx",
+    "playwright",
+    "anyio",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/zealgen"]
+
+[project.scripts]
+zealgen = "zealgen.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
