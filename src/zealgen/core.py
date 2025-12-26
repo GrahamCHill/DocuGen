@@ -134,39 +134,43 @@ async def generate(urls, output, js=False, max_pages=100, progress_callback=None
             favicon_url = get_favicon_url(result.html, url)
             await builder.set_icon(favicon_url)
 
+        # Link discovery and rewriting
+        soup = BeautifulSoup(result.html, "lxml")
+        base_parsed = urlparse(url)
+        for a in soup.find_all("a", href=True):
+            raw_href = a["href"]
+            next_url = urljoin(url, raw_href)
+            clean_url = next_url.split("#")[0]
+            anchor = next_url.split("#")[1] if "#" in next_url else None
+            
+            next_parsed = urlparse(clean_url)
+            
+            # Decision to follow link:
+            # 1. If it's explicitly in allowed_urls
+            # 2. OR if it matches the domain/path heuristic (stay within same documentation)
+            is_allowed = bool(allowed_urls and normalize_url(clean_url) in allowed_urls)
+            is_within_doc = next_parsed.netloc == base_parsed.netloc and \
+                            next_parsed.path.startswith(base_parsed.path.rsplit('/', 1)[0])
+            
+            if is_allowed or is_within_doc:
+                local_name = get_filename_from_url(clean_url)
+                a["href"] = f"{local_name}#{anchor}" if anchor else local_name
+                
+                # Use normalized URL for checking visited/queue to be consistent
+                norm_clean_url = normalize_url(clean_url)
+                # But we still need the actual URL to fetch it
+                if clean_url not in visited and clean_url not in queue:
+                     if not allowed_urls or norm_clean_url in allowed_urls:
+                        queue.append(clean_url)
+        
+        updated_html = str(soup)
+
         for parser in PARSERS:
-            if parser.matches(result.html):
+            if parser.matches(updated_html):
                 # Rewrite assets to be local
-                html = await rewrite_assets(result.html, url, doc_dir)
+                html_with_assets = await rewrite_assets(updated_html, url, doc_dir)
                 
-                # Link discovery and rewriting
-                soup = BeautifulSoup(html, "lxml")
-                base_parsed = urlparse(url)
-                for a in soup.find_all("a", href=True):
-                    raw_href = a["href"]
-                    next_url = urljoin(url, raw_href)
-                    clean_url = next_url.split("#")[0]
-                    anchor = next_url.split("#")[1] if "#" in next_url else None
-                    
-                    next_parsed = urlparse(clean_url)
-                    
-                    # Decision to follow link:
-                    # 1. If it's explicitly in allowed_urls
-                    # 2. OR if it matches the domain/path heuristic (stay within same documentation)
-                    is_allowed = bool(allowed_urls and normalize_url(clean_url) in allowed_urls)
-                    is_within_doc = next_parsed.netloc == base_parsed.netloc and \
-                                   next_parsed.path.startswith(base_parsed.path.rsplit('/', 1)[0])
-                    
-                    if is_allowed or is_within_doc:
-                        local_name = get_filename_from_url(clean_url)
-                        a["href"] = f"{local_name}#{anchor}" if anchor else local_name
-                        
-                        if clean_url not in visited and clean_url not in queue:
-                            if not allowed_urls or normalize_url(clean_url) in allowed_urls:
-                                queue.append(clean_url)
-                
-                html = str(soup)
-                parsed = parser.parse(html)
+                parsed = parser.parse(html_with_assets)
                 builder.add_page(parsed, url)
                 pages_count += 1
                 break

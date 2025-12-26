@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QPushButton, QListWidget, QFileDialog, QCheckBox,
     QLabel, QTextEdit, QMessageBox, QProgressBar, QDialog,
-    QListWidgetItem, QInputDialog, QComboBox
+    QListWidgetItem, QInputDialog, QComboBox, QTreeWidget, QTreeWidgetItem
 )
 from PySide6.QtCore import Qt, QThread, Signal, QStandardPaths
 from .core import generate, scan
@@ -84,12 +84,17 @@ class URLSelectionDialog(QDialog):
         # Right side: Other URLs (Subdomains/External)
         other_layout = QVBoxLayout()
         other_layout.addWidget(QLabel("Other Discovered Links:"))
-        self.other_list = QListWidget()
-        other_layout.addWidget(self.other_list)
+        self.other_tree = QTreeWidget()
+        self.other_tree.setHeaderHidden(True)
+        self.other_tree.itemChanged.connect(self.on_item_changed)
+        other_layout.addWidget(self.other_tree)
         lists_layout.addLayout(other_layout)
         
         main_layout.addLayout(lists_layout)
 
+        # Group other URLs by domain
+        other_urls_by_domain = {}
+        
         for url in urls:
             normalized = normalize_url(url)
             parsed = urlparse(url)
@@ -101,18 +106,29 @@ class URLSelectionDialog(QDialog):
                 if normalized in self.initial_urls:
                     # Mandatory: Original input URLs
                     item.setText(f"{url} *")
-                    # No checkbox or disabled checkbox? User said "not have a tickbox"
-                    # But if I use QListWidgetItem without setting check state, it doesn't have one.
                     self.related_list.addItem(item)
                 else:
                     # Optional subpage on the same domain
                     item.setCheckState(Qt.Checked)
                     self.related_list.addItem(item)
             else:
-                # Other domains go to the right
-                item = QListWidgetItem(url)
-                item.setCheckState(Qt.Checked)
-                self.other_list.addItem(item)
+                # Other domains go to the right tree
+                if domain not in other_urls_by_domain:
+                    other_urls_by_domain[domain] = []
+                other_urls_by_domain[domain].append(url)
+
+        # Populate the other_tree
+        for domain in sorted(other_urls_by_domain.keys()):
+            domain_item = QTreeWidgetItem(self.other_tree)
+            domain_item.setText(0, domain)
+            domain_item.setCheckState(0, Qt.Checked)
+            domain_item.setFlags(domain_item.flags() | Qt.ItemIsAutoTristate | Qt.ItemIsUserCheckable)
+            
+            for url in sorted(other_urls_by_domain[domain]):
+                url_item = QTreeWidgetItem(domain_item)
+                url_item.setText(0, url)
+                url_item.setCheckState(0, Qt.Checked)
+                url_item.setFlags(url_item.flags() | Qt.ItemIsUserCheckable)
 
         btns = QHBoxLayout()
         select_all = QPushButton("Select All Optional")
@@ -129,35 +145,72 @@ class URLSelectionDialog(QDialog):
         ok_btn.clicked.connect(self.accept)
         main_layout.addWidget(ok_btn)
 
+    def on_item_changed(self, item, column):
+        """Handle parent/child checkbox synchronization."""
+        self.other_tree.blockSignals(True)
+        state = item.checkState(column)
+        
+        # If a parent is changed, update all children
+        if item.childCount() > 0:
+            for i in range(item.childCount()):
+                item.child(i).setCheckState(column, state)
+        
+        # Qt.ItemIsAutoTristate handles parent update when children change 
+        # but we might need to ensure it's set correctly.
+        
+        self.other_tree.blockSignals(False)
+
     def select_all_optional(self):
-        # Select all in the other list (right pane) that have checkboxes
-        for i in range(self.other_list.count()):
-            item = self.other_list.item(i)
+        # Select all in the related list
+        for i in range(self.related_list.count()):
+            item = self.related_list.item(i)
             if item.checkState() is not None:
                 item.setCheckState(Qt.Checked)
+        
+        # Select all in the other tree
+        for i in range(self.other_tree.topLevelItemCount()):
+            item = self.other_tree.topLevelItem(i)
+            item.setCheckState(0, Qt.Checked)
+            for j in range(item.childCount()):
+                item.child(j).setCheckState(0, Qt.Checked)
 
     def deselect_all_optional(self):
-        # Deselect all in the other list (right pane) that have checkboxes
-        for i in range(self.other_list.count()):
-            item = self.other_list.item(i)
+        # Deselect all in the related list
+        for i in range(self.related_list.count()):
+            item = self.related_list.item(i)
             if item.checkState() is not None:
                 item.setCheckState(Qt.Unchecked)
 
+        # Deselect all in the other tree
+        for i in range(self.other_tree.topLevelItemCount()):
+            item = self.other_tree.topLevelItem(i)
+            item.setCheckState(0, Qt.Unchecked)
+            for j in range(item.childCount()):
+                item.child(j).setCheckState(0, Qt.Unchecked)
+
     def get_selected_urls(self):
         selected = []
-        # Process both lists
-        for list_widget in [self.related_list, self.other_list]:
-            for i in range(list_widget.count()):
-                item = list_widget.item(i)
-                # If it has no checkbox, it's mandatory
-                if item.checkState() is None:
-                    # Strip the mandatory marker if present
-                    text = item.text()
-                    if text.endswith(" *"):
-                        text = text[:-2]
-                    selected.append(text)
-                elif item.checkState() == Qt.Checked:
-                    selected.append(item.text())
+        # Process related_list
+        for i in range(self.related_list.count()):
+            item = self.related_list.item(i)
+            # If it has no checkbox, it's mandatory
+            if item.checkState() is None:
+                # Strip the mandatory marker if present
+                text = item.text()
+                if text.endswith(" *"):
+                    text = text[:-2]
+                selected.append(text)
+            elif item.checkState() == Qt.Checked:
+                selected.append(item.text())
+        
+        # Process other_tree (only children are actual URLs)
+        for i in range(self.other_tree.topLevelItemCount()):
+            parent = self.other_tree.topLevelItem(i)
+            for j in range(parent.childCount()):
+                child = parent.child(j)
+                if child.checkState(0) == Qt.Checked:
+                    selected.append(child.text(0))
+                    
         return selected
 
 class MainWindow(QMainWindow):
@@ -202,7 +255,7 @@ class MainWindow(QMainWindow):
 
         # Options
         options_layout = QHBoxLayout()
-        self.js_checkbox = QCheckBox("Enable JavaScript")
+        self.js_checkbox = QCheckBox("Enable JavaScript", checked=True)
         options_layout.addWidget(self.js_checkbox)
         
         options_layout.addWidget(QLabel("JS Engine:"))

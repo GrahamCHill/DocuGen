@@ -35,13 +35,37 @@ class QtFetchWorker(QObject):
             # Disconnect to avoid multiple calls if multiple loads happen
             self._page.loadFinished.disconnect(on_load_finished)
             if ok:
-                # Start polling for content stability
-                self._poll_content()
+                # Wait a bit more for any JS to finish rendering content
+                QTimer.singleShot(5000, self._start_scrolling)
             else:
                 self.fetch_finished.emit("", self._current_url)
         
         self._page.loadFinished.connect(on_load_finished)
         self._page.load(QUrl(url))
+
+    def _start_scrolling(self):
+        # Scroll from top to bottom
+        self._page.runJavaScript("""
+            (async () => {
+                await new Promise((resolve) => {
+                    let totalHeight = 0;
+                    let distance = 100;
+                    let timer = setInterval(() => {
+                        let scrollHeight = document.body.scrollHeight;
+                        window.scrollBy(0, distance);
+                        totalHeight += distance;
+
+                        if(totalHeight >= scrollHeight){
+                            clearInterval(timer);
+                            resolve();
+                        }
+                    }, 100);
+                });
+                window.scrollTo(0, 0);
+            })();
+        """)
+        # Start polling for content stability
+        QTimer.singleShot(2000, self._poll_content) # Give it some time to start scrolling
 
     def _poll_content(self):
         self._page.toHtml(self._check_stability)
