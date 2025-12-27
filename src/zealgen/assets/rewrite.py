@@ -65,6 +65,30 @@ async def rewrite_assets(html, base_url, out_dir):
                 if local_name:
                     el[attr] = local_name
 
+        # Handle YouTube embeds in iframes
+        for iframe in soup.find_all("iframe", src=True):
+            src = iframe["src"]
+            if "youtube.com/embed/" in src or "youtube-nocookie.com/embed/" in src:
+                # Keep absolute URL for YouTube
+                if "youtube.com/embed/" in src:
+                    video_id = src.split("youtube.com/embed/")[1].split("?")[0]
+                else:
+                    video_id = src.split("youtube-nocookie.com/embed/")[1].split("?")[0]
+                
+                youtube_url = f"https://www.youtube.com/watch?v={video_id}"
+                
+                # Create a link to the video
+                link = soup.new_tag("a", href=youtube_url, target="_blank")
+                link.string = "View on YouTube"
+                
+                # Add a container or just append the link after the iframe
+                container = soup.new_tag("div", **{"class": "youtube-embed-container"})
+                iframe.wrap(container)
+                
+                link_div = soup.new_tag("div", **{"class": "youtube-link"})
+                link_div.append(link)
+                container.append(link_div)
+
         # Handle style attributes with url()
         for el in soup.find_all(style=True):
             style = el["style"]

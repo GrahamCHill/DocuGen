@@ -8,7 +8,8 @@ def clean_domain(netloc: str) -> str:
     return domain
 
 def normalize_url(url: str) -> str:
-    """Normalize URL for comparison by stripping scheme, www, and trailing slashes."""
+    """Normalize URL for comparison by stripping scheme, www, and trailing slashes.
+    Preserves fragment if it looks like a route (e.g. for Three.js)."""
     parsed = urlparse(url)
     netloc = parsed.netloc.lower()
     if netloc.startswith("www."):
@@ -18,11 +19,25 @@ def normalize_url(url: str) -> str:
     if not path:
         path = ""
     
+    # Special handling for hash-based routing (e.g. Three.js)
+    fragment = parsed.fragment
+    use_fragment = False
+    if fragment and ("/" in fragment or "api" in fragment.lower() or "manual" in fragment.lower()):
+        use_fragment = True
+    elif fragment and len(fragment) > 3 and not any(c in fragment for c in " ."):
+        # If the fragment is reasonably long and doesn't look like a simple anchor
+        # (contains no spaces or dots), it might be a route.
+        # This is a heuristic and might need refinement.
+        use_fragment = True
+
     query = parsed.query
+    res = f"{netloc}{path}"
     if query:
-        return f"{netloc}{path}?{query}".lower()
+        res += f"?{query}"
+    if use_fragment and fragment:
+        res += f"#{fragment}"
         
-    return f"{netloc}{path}".lower()
+    return res.lower()
 
 def get_filename_from_url(url: str) -> str:
     parsed = urlparse(url)
@@ -36,6 +51,22 @@ def get_filename_from_url(url: str) -> str:
     # Remove leading slash
     if path.startswith("/"):
         path = path[1:]
+    
+    # Special handling for hash-based routing (e.g. Three.js)
+    fragment = parsed.fragment
+    use_fragment = False
+    if fragment and ("/" in fragment or "api" in fragment.lower() or "manual" in fragment.lower()):
+        use_fragment = True
+    elif fragment and len(fragment) > 3 and not any(c in fragment for c in " ."):
+        use_fragment = True
+    
+    if use_fragment and fragment:
+        # Sanitize fragment for filename
+        safe_fragment = fragment.replace("/", "_").replace("#", "_").replace("?", "_")
+        if path.endswith(".html"):
+            path = path[:-5] + "_" + safe_fragment + ".html"
+        else:
+            path = path + "_" + safe_fragment
     
     query = parsed.query
     if query:

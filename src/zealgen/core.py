@@ -66,18 +66,39 @@ async def scan(urls, js=False, max_pages=10, progress_callback=None, fetcher_typ
 
         pages_count += 1
         
+        # Link discovery and rewriting
         soup = BeautifulSoup(result.html, "lxml")
+        current_url = result.url
+        base_parsed = urlparse(current_url)
         for a in soup.find_all("a", href=True):
-            next_url = urljoin(url, a["href"])
+            next_url = urljoin(current_url, a["href"])
+            
+            # Use normalized URL for discovery decision
+            norm_next_url = normalize_url(next_url)
             clean_url = next_url.split("#")[0]
+            
+            # If normalize_url preserved the fragment, we use the fragment-inclusive URL as clean_url
+            if "#" in norm_next_url and "#" not in clean_url:
+                clean_url = next_url # Keep the hash if it was deemed important for routing
+            
             norm_url = normalize_url(clean_url)
             
             if norm_url not in visited and norm_url not in queue:
-                # For scanning, we might want to be a bit more liberal or just collect all
-                # but let's stick to a reasonable depth/heuristic for now
-                discovered.add(clean_url)
-                if len(visited) < max_pages:
-                    queue.append(clean_url)
+                # More robust within-doc check for scanning too
+                is_within_doc = False
+                for start_url in urls:
+                    start_parsed = urlparse(start_url)
+                    if urlparse(clean_url).netloc == start_parsed.netloc:
+                        base_path = start_parsed.path.rsplit('/', 1)[0]
+                        if not base_path.endswith('/'): base_path += '/'
+                        if urlparse(clean_url).path.startswith(base_path):
+                            is_within_doc = True
+                            break
+                
+                if is_within_doc:
+                    discovered.add(clean_url)
+                    if len(visited) < max_pages:
+                        queue.append(clean_url)
 
     return sorted(list(discovered))
 
@@ -139,12 +160,22 @@ async def generate(urls, output, js=False, max_pages=100, progress_callback=None
 
         # Link discovery and rewriting
         soup = BeautifulSoup(result.html, "lxml")
-        base_parsed = urlparse(url)
+        current_url = result.url
+        base_parsed = urlparse(current_url)
         for a in soup.find_all("a", href=True):
             raw_href = a["href"]
-            next_url = urljoin(url, raw_href)
+            next_url = urljoin(current_url, raw_href)
+            
+            # Use normalized URL for discovery decision
+            norm_next_url = normalize_url(next_url)
             clean_url = next_url.split("#")[0]
-            anchor = next_url.split("#")[1] if "#" in next_url else None
+            
+            # If normalize_url preserved the fragment, we use the fragment-inclusive URL as clean_url
+            if "#" in norm_next_url and "#" not in clean_url:
+                clean_url = next_url # Keep the hash if it was deemed important for routing
+                anchor = None
+            else:
+                anchor = next_url.split("#")[1] if "#" in next_url else None
             
             next_parsed = urlparse(clean_url)
             
@@ -152,8 +183,20 @@ async def generate(urls, output, js=False, max_pages=100, progress_callback=None
             # 1. If it's explicitly in allowed_urls
             # 2. OR if it matches the domain/path heuristic (stay within same documentation)
             is_allowed = bool(allowed_urls and normalize_url(clean_url) in allowed_urls)
-            is_within_doc = next_parsed.netloc == base_parsed.netloc and \
-                            next_parsed.path.startswith(base_parsed.path.rsplit('/', 1)[0])
+            
+            # More robust within-doc check
+            # We want to stay on the same domain and at or below the base path of the starting URLs
+            is_within_doc = False
+            for start_url in urls:
+                start_parsed = urlparse(start_url)
+                if next_parsed.netloc == start_parsed.netloc:
+                    # Check if next_url is under the same base path
+                    base_path = start_parsed.path.rsplit('/', 1)[0]
+                    if not base_path.endswith('/'):
+                        base_path += '/'
+                    if next_parsed.path.startswith(base_path):
+                        is_within_doc = True
+                        break
             
             if is_allowed or is_within_doc:
                 local_name = get_filename_from_url(clean_url)
