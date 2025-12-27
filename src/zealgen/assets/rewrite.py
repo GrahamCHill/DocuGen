@@ -64,6 +64,55 @@ async def rewrite_assets(html, base_url, out_dir):
                 local_name = await download_and_save_asset(client, absolute_url, out_dir, tag)
                 if local_name:
                     el[attr] = local_name
+                    # If it's a CSS file, we need to rewrite assets inside it
+                    if tag == "link" and el.get("rel") == ["stylesheet"] or (local_name.endswith(".css")):
+                         await rewrite_css_assets(client, out_dir / local_name, absolute_url, out_dir)
+
+        # ES modules imports in script tags
+        for script in soup.find_all("script", type="module"):
+            if script.string:
+                content = script.string
+                # Simple regex for static imports: import ... from '...'
+                # We need to handle ../ and other relative paths
+                imports = re.findall(r'from\s+[\'"](.+?)[\'"]', content)
+                direct_imports = re.findall(r'import\s+[\'"](.+?)[\'"]', content)
+                
+                for imp_url in set(imports + direct_imports):
+                    if imp_url.startswith("data:"): continue
+                    
+                    # Resolve relative URL using current page URL
+                    # However, rewrite_assets' base_url IS the current page URL (usually)
+                    absolute_url = urljoin(base_url, imp_url)
+                    if not absolute_url.startswith("http"): continue
+                    
+                    local_name = await download_and_save_asset(client, absolute_url, out_dir, "script")
+                    if local_name:
+                        # Use local_name instead of imp_url
+                        # We MUST ensure we only replace the exact string in quotes to avoid partial matches
+                        # but simple string replace is risky if imp_url is short.
+                        # However, ES module imports are usually specific enough.
+                        content = content.replace(f"'{imp_url}'", f"'{local_name}'")
+                        content = content.replace(f'"{imp_url}"', f'"{local_name}"')
+                script.string = content
+
+        # Common JS asset patterns
+        for script in soup.find_all("script"):
+            if script.string:
+                content = script.string
+                # Match fetch('...') or fetch("...")
+                fetches = re.findall(r'fetch\(\s*[\'"](.+?)[\'"]\s*\)', content)
+                for fetch_url in fetches:
+                    if fetch_url.startswith("data:"): continue
+                    
+                    absolute_url = urljoin(base_url, fetch_url)
+                    if not absolute_url.startswith("http"): continue
+                    
+                    tag_type = "json" if "json" in fetch_url.lower() else "script"
+                    local_name = await download_and_save_asset(client, absolute_url, out_dir, tag_type)
+                    if local_name:
+                        content = content.replace(f"'{fetch_url}'", f"'{local_name}'")
+                        content = content.replace(f'"{fetch_url}"', f'"{local_name}"')
+                script.string = content
 
         # Handle YouTube embeds in iframes
         for iframe in soup.find_all("iframe", src=True):
@@ -88,6 +137,16 @@ async def rewrite_assets(html, base_url, out_dir):
                 link_div = soup.new_tag("div", **{"class": "youtube-link"})
                 link_div.append(link)
                 container.append(link_div)
+            else:
+                # Ensure other iframes use absolute URLs if they are not already
+                # This prevents relative path issues when the page is served from a docset
+                absolute_url = urljoin(base_url, src)
+                iframe["src"] = absolute_url
+
+        # Remove "xr-spatial-tracking" from any Permissions-Policy meta tags if they exist
+        for meta in soup.find_all("meta", attrs={"http-equiv": "Permissions-Policy"}):
+            if "xr-spatial-tracking" in meta.get("content", ""):
+                meta["content"] = meta["content"].replace("xr-spatial-tracking", "")
 
         # Handle style attributes with url()
         for el in soup.find_all(style=True):
@@ -107,39 +166,83 @@ async def rewrite_assets(html, base_url, out_dir):
 
     return str(soup)
 
+async def rewrite_css_assets(client, css_path, base_url, out_dir):
+    if not css_path.exists():
+        return
+    
+    content = css_path.read_text(errors='ignore')
+    # Find url(...) in CSS
+    urls = re.findall(r'url\([\'"]?(.*?)[\'"]?\)', content)
+    modified = False
+    for url in set(urls):
+        if url.startswith("data:") or url.startswith("http"):
+            absolute_url = urljoin(base_url, url)
+        else:
+            absolute_url = urljoin(base_url, url)
+        
+        if not absolute_url.startswith("http"):
+            continue
+            
+        local_name = await download_and_save_asset(client, absolute_url, out_dir, "style")
+        if local_name:
+            content = content.replace(url, local_name)
+            modified = True
+    
+    if modified:
+        css_path.write_text(content)
+
 async def download_and_save_asset(client, url, out_dir, tag):
     try:
-        r = await client.get(url)
-        r.raise_for_status()
-        data = r.content
-        
-        # Use a hash of the full URL to ensure uniqueness and avoid collision
-        ext = pathlib.Path(url).suffix
+        # Avoid re-downloading
+        ext = pathlib.Path(url.split("?")[0]).suffix
         if not ext or len(ext) > 5:
             if tag == "script":
                 ext = ".js"
             elif tag == "link":
                 ext = ".css"
+            elif tag == "json":
+                ext = ".json"
             else:
-                # Try to guess from content-type
-                content_type = r.headers.get("content-type", "")
-                if "image/svg" in content_type:
-                    ext = ".svg"
-                elif "image/jpeg" in content_type:
-                    ext = ".jpg"
-                elif "image/gif" in content_type:
-                    ext = ".gif"
-                elif "image/webp" in content_type:
-                    ext = ".webp"
-                else:
-                    ext = ".png" # Default for images
+                ext = "" # Will be guessed from content-type
         
         fname = hashlib.md5(url.encode()).hexdigest() + ext
-        
         path = out_dir / fname
-        if not path.exists():
-            path.write_bytes(data)
+        if path.exists():
+            return fname
 
+        r = await client.get(url)
+        r.raise_for_status()
+        data = r.content
+        
+        if not ext:
+            # Try to guess from content-type
+            content_type = r.headers.get("content-type", "")
+            if "image/svg" in content_type:
+                ext = ".svg"
+            elif "image/jpeg" in content_type:
+                ext = ".jpg"
+            elif "image/gif" in content_type:
+                ext = ".gif"
+            elif "image/webp" in content_type:
+                ext = ".webp"
+            elif "application/json" in content_type:
+                ext = ".json"
+            elif "font/woff2" in content_type:
+                ext = ".woff2"
+            elif "font/woff" in content_type:
+                ext = ".woff"
+            elif "font/ttf" in content_type:
+                ext = ".ttf"
+            else:
+                ext = ".png" # Default for images
+            
+            # Recompute filename with extension if we didn't have one
+            fname = hashlib.md5(url.encode()).hexdigest() + ext
+            path = out_dir / fname
+            if path.exists():
+                return fname
+
+        path.write_bytes(data)
         return fname
     except Exception as e:
         print(f"Failed to download asset {url}: {e}")

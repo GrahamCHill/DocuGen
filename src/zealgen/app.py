@@ -256,6 +256,9 @@ class MainWindow(QMainWindow):
         options_layout = QHBoxLayout()
         self.js_checkbox = QCheckBox("Enable JavaScript", checked=True)
         options_layout.addWidget(self.js_checkbox)
+
+        self.ignore_optional_checkbox = QCheckBox("Ignore Optional (Auto-generate)", checked=False)
+        options_layout.addWidget(self.ignore_optional_checkbox)
         
         options_layout.addWidget(QLabel("JS Engine:"))
         self.js_engine_combo = QComboBox()
@@ -339,8 +342,8 @@ class MainWindow(QMainWindow):
             
         self.output_base = self.out_input.text().strip()
         self.js = self.js_checkbox.isChecked()
+        self.ignore_optional = self.ignore_optional_checkbox.isChecked()
         self.engine = self.js_engine_combo.currentText()
-        self.docsets_to_generate = []
 
         if not self.docsets_queue:
             QMessageBox.warning(self, "Error", "Please add at least one URL.")
@@ -354,7 +357,9 @@ class MainWindow(QMainWindow):
 
     def process_next_docset(self):
         if not self.docsets_queue:
-            self.run_generation()
+            self.log_output.append("All docsets processed.")
+            self.generate_btn.setEnabled(True)
+            self.progress_bar.setVisible(False)
             return
 
         self.current_docset = self.docsets_queue.pop(0)
@@ -371,48 +376,60 @@ class MainWindow(QMainWindow):
     def on_scan_finished(self, discovered_urls):
         self.progress_bar.setVisible(False)
         
-        dialog = URLSelectionDialog(discovered_urls, [self.current_docset['url']], self)
-        dialog.setWindowTitle(f"Select URLs for {self.current_docset['name']}")
-        if dialog.exec() == QDialog.Accepted:
-            selected_urls = dialog.get_selected_urls()
-            if not selected_urls:
-                self.log_output.append(f"No URLs selected for {self.current_docset['name']}. Skipping.")
+        selected_urls = []
+        if self.ignore_optional:
+            # If ignore optional, we take only the initial URL or all discovered?
+            # Usually "ignore optional" means just do it automatically with defaults.
+            # In the dialog, mandatory URLs are initial URLs. 
+            # If we ignore optional, maybe we just want to download everything discovered?
+            # Or just the main site? 
+            # The user said "ignore optional outright and then it just does it automatically".
+            # In URLSelectionDialog, everything is checked by default EXCEPT mandatory which are always in.
+            # So I'll take ALL discovered URLs if ignore_optional is True.
+            selected_urls = discovered_urls
+            self.log_output.append(f"Automatically selected {len(selected_urls)} URLs for {self.current_docset['name']}.")
+        else:
+            dialog = URLSelectionDialog(discovered_urls, [self.current_docset['url']], self)
+            dialog.setWindowTitle(f"Select URLs for {self.current_docset['name']}")
+            if dialog.exec() == QDialog.Accepted:
+                selected_urls = dialog.get_selected_urls()
             else:
-                self.docsets_to_generate.append((
-                    self.current_docset['name'],
-                    [self.current_docset['url']],
-                    selected_urls
-                ))
+                self.log_output.append(f"Generation for {self.current_docset['name']} cancelled by user.")
+                self.process_next_docset()
+                return
+
+        if not selected_urls:
+            self.log_output.append(f"No URLs selected for {self.current_docset['name']}. Skipping.")
             self.process_next_docset()
         else:
-            self.log_output.append("Generation cancelled by user.")
-            self.generate_btn.setEnabled(True)
+            self.run_single_generation(
+                self.current_docset['name'],
+                [self.current_docset['url']],
+                selected_urls
+            )
 
-    def run_generation(self):
-        if not self.docsets_to_generate:
-            self.log_output.append("No docsets to generate.")
-            self.generate_btn.setEnabled(True)
-            return
-
-        self.log_output.append(f"Starting generation for {len(self.docsets_to_generate)} docsets...")
+    def run_single_generation(self, name, urls, selected_urls):
+        self.log_output.append(f"Starting generation for {name}...")
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
 
-        self.worker = MultiWorker(self.docsets_to_generate, self.output_base, self.js, self.engine)
-        self.worker.finished.connect(self.on_finished)
+        # We use MultiWorker even for a single docset to keep it simple
+        self.worker = MultiWorker([(name, urls, selected_urls)], self.output_base, self.js, self.engine)
+        self.worker.finished.connect(self.on_generation_finished)
         self.worker.error.connect(self.on_error)
         self.worker.progress.connect(self.update_progress)
         self.worker.log.connect(lambda m: self.log_output.append(m))
         self.worker.start()
 
+    def on_generation_finished(self):
+        self.log_output.append(f"Finished generating {self.current_docset['name']}.")
+        if not self.docsets_queue:
+             QMessageBox.information(self, "Done", "All docsets generated successfully.")
+        self.process_next_docset()
+
     def update_progress(self, current, total):
         self.progress_bar.setMaximum(total)
         self.progress_bar.setValue(current)
-
-    def on_finished(self):
-        self.progress_bar.setValue(self.progress_bar.maximum())
-        self.generate_btn.setEnabled(True)
-        QMessageBox.information(self, "Done", "Docset generated successfully.")
 
     def on_error(self, message):
         self.generate_btn.setEnabled(True)

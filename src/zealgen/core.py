@@ -96,9 +96,10 @@ async def scan(urls, js=False, max_pages=10, progress_callback=None, fetcher_typ
                             break
                 
                 if is_within_doc:
-                    discovered.add(clean_url)
                     if len(visited) < max_pages:
                         queue.append(clean_url)
+                
+                discovered.add(clean_url)
 
     return sorted(list(discovered))
 
@@ -208,17 +209,22 @@ async def generate(urls, output, js=False, max_pages=100, progress_callback=None
                 if norm_clean_url not in visited and norm_clean_url not in queue:
                      if not allowed_urls or norm_clean_url in allowed_urls:
                         queue.append(clean_url)
+            else:
+                # If it's not within doc and not allowed, at least make it absolute if it was relative
+                # so it doesn't break in the flat docset structure.
+                a["href"] = next_url
         
-        updated_html = str(soup)
+        updated_html = await rewrite_assets(str(soup), url, doc_dir)
+        pages_count += 1
+        
+        # Ensure DOCTYPE exists
+        if not updated_html.lstrip().lower().startswith("<!doctype"):
+            updated_html = "<!DOCTYPE html>\n" + updated_html
 
         for parser in PARSERS:
             if parser.matches(updated_html):
-                # Rewrite assets to be local
-                html_with_assets = await rewrite_assets(updated_html, url, doc_dir)
-                
-                parsed = parser.parse(html_with_assets)
+                parsed = parser.parse(updated_html)
                 builder.add_page(parsed, url)
-                pages_count += 1
                 break
 
     if progress_callback:
