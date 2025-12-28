@@ -196,6 +196,13 @@ async def generate(urls, output, js=False, max_pages=100, progress_callback=None
             # 2. OR if it matches the domain/path heuristic (stay within same documentation)
             is_allowed = bool(allowed_urls and normalize_url(clean_url) in allowed_urls)
             
+            # Check if it matches any of the root URLs domains (even if not in same path)
+            is_root_domain = False
+            for start_url in urls:
+                if next_parsed.netloc == urlparse(start_url).netloc:
+                    is_root_domain = True
+                    break
+
             # More robust within-doc check
             # We want to stay on the same domain and at or below the base path of the starting URLs
             is_within_doc = False
@@ -216,7 +223,7 @@ async def generate(urls, output, js=False, max_pages=100, progress_callback=None
                         is_within_doc = True
                         break
             
-            if is_allowed or is_within_doc:
+            if is_allowed or is_within_doc or is_root_domain:
                 if next_url_is_same_page and anchor:
                     a["href"] = f"#{anchor}"
                 else:
@@ -227,7 +234,8 @@ async def generate(urls, output, js=False, max_pages=100, progress_callback=None
                 norm_clean_url = normalize_url(clean_url)
                 # But we still need the actual URL to fetch it
                 if norm_clean_url not in visited and norm_clean_url not in queue:
-                     if not allowed_urls or norm_clean_url in allowed_urls:
+                     # Only follow links that are allowed or within doc
+                     if is_allowed or is_within_doc:
                         queue.append(clean_url)
             else:
                 # If it's not within doc and not allowed, at least make it absolute if it was relative
@@ -238,6 +246,7 @@ async def generate(urls, output, js=False, max_pages=100, progress_callback=None
         
         # Determine norm_url for comparison with main_url
         norm_url = normalize_url(url)
+        is_main = (norm_url == norm_main_url)
         
         pages_count += 1
         
@@ -248,7 +257,6 @@ async def generate(urls, output, js=False, max_pages=100, progress_callback=None
         for parser in PARSERS:
             if parser.matches(updated_html):
                 parsed = parser.parse(updated_html)
-                is_main = (norm_url == norm_main_url)
                 builder.add_page(parsed, url, is_main=is_main)
                 break
 

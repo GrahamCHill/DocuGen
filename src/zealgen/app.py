@@ -454,7 +454,7 @@ class MainWindow(QMainWindow):
     def on_generation_finished(self):
         self.log_output.append(f"Finished generating {self.current_docset['name']}.")
         if not self.docsets_queue:
-            self.log_output.append('<br><font color="green"><b>Done: All docsets generated successfully.</b></font>')
+            self.log_output.append('<br><font color="green"><b>Done: Docset(s) generated successfully.</b></font>')
         self.process_next_docset()
 
     def update_progress(self, current, total):

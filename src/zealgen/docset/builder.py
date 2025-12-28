@@ -16,6 +16,7 @@ class DocsetBuilder:
         self.index = DocsetIndex(os.path.join(self.resources_path, "docSet.dsidx"))
         self._setup_directories()
         self.first_page = None
+        self.main_page = None
         self.has_icon = False
 
     def _setup_directories(self):
@@ -41,7 +42,10 @@ class DocsetBuilder:
 
     def add_page(self, parsed_page, url, is_main=False):
         filename = get_filename_from_url(url)
-        if is_main or not self.first_page:
+        if is_main:
+            self.main_page = filename
+            
+        if not self.first_page:
             self.first_page = filename
             
         dest_path = os.path.join(self.documents_path, filename)
@@ -57,9 +61,11 @@ class DocsetBuilder:
         self.index.close()
 
     def _write_info_plist(self):
-        index_file = "index.html"
-        if not os.path.exists(os.path.join(self.documents_path, index_file)):
-            index_file = self.first_page or "index.html"
+        index_file = self.main_page or self.first_page or "index.html"
+        
+        # If a literal index.html exists, it might be a better choice only if we don't have a main_page
+        if not self.main_page and os.path.exists(os.path.join(self.documents_path, "index.html")):
+            index_file = "index.html"
 
         info = {
             "CFBundleIdentifier": self.docset_name.lower(),
