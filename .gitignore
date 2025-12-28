@@ -10,3 +10,4 @@
 .DS_Store
 /src/zealgen/build
 /src/zealgen/dist
+.output.txt
