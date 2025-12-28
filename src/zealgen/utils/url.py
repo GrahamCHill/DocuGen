@@ -15,7 +15,14 @@ def normalize_url(url: str) -> str:
     if netloc.startswith("www."):
         netloc = netloc[4:]
     
-    path = parsed.path.rstrip("/")
+    path = parsed.path
+    # Remove common index files
+    for index_file in ["/index.html", "/index.htm", "/index.php", "/index.jsp", "/index.asp"]:
+        if path.lower().endswith(index_file):
+            path = path[:-len(index_file)]
+            break
+
+    path = path.rstrip("/")
     if not path:
         path = ""
     
@@ -40,13 +47,33 @@ def normalize_url(url: str) -> str:
     return res.lower()
 
 def get_filename_from_url(url: str) -> str:
+    # Normalize the URL first to handle index files consistently
     parsed = urlparse(url)
-    # Use cleaned domain for the filename prefix
     domain = clean_domain(parsed.netloc)
     
     path = parsed.path
+    # Remove common index files
+    for index_file in ["/index.html", "/index.htm", "/index.php", "/index.jsp", "/index.asp"]:
+        if path.lower().endswith(index_file):
+            path = path[:-len(index_file)]
+            if not path or not path.endswith("/"):
+                path += "/"
+            break
+
     if not path or path.endswith("/"):
         path += "index.html"
+    elif "." not in path.split("/")[-1]:
+        # If no extension in the last part of path, it could be a file without extension
+        # or a directory without a trailing slash. 
+        # For documentation sites, it's often a file (e.g. sphinx or similar).
+        # But for many others it's a directory.
+        # Let's keep it as is and append .html to be safe, unless it's a known directory pattern.
+        path += ".html"
+    elif not (path.lower().endswith(".html") or path.lower().endswith(".htm")):
+        # It has an extension but it's not html, e.g. .php
+        # We want to keep the original extension in the filename but append .html
+        # wait, if it's .php we usually want it to be .php.html
+        pass # Will be handled by the end block
     
     # Remove leading slash
     if path.startswith("/"):
