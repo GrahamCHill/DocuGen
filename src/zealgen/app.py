@@ -370,7 +370,7 @@ class MainWindow(QMainWindow):
 
     def process_next_docset(self):
         if not self.docsets_queue:
-            self.log_output.append("All docsets processed.")
+            # All docsets processed message is now handled in on_generation_finished
             self.generate_btn.setEnabled(True)
             self.progress_bar.setVisible(False)
             return
@@ -401,17 +401,21 @@ class MainWindow(QMainWindow):
             # In URLSelectionDialog, everything is checked by default EXCEPT mandatory which are always in.
             # So I'll take ALL discovered URLs if ignore_optional is True.
             selected_urls = discovered_urls
-            root_urls = [self.current_docset['url']]
+            main_url = self.current_docset['url']
+            root_urls = [main_url]
             # Also add other domains as roots if they are in discovered_urls
             # We only add the shortest URL for each unique domain to avoid redundant roots
-            initial_domain = clean_domain(urlparse(self.current_docset['url']).netloc)
+            initial_domain = clean_domain(urlparse(main_url).netloc)
             other_domains = {}
             for u in discovered_urls:
                 domain = clean_domain(urlparse(u).netloc)
                 if domain != initial_domain:
                     if domain not in other_domains or len(u) < len(other_domains[domain]):
                         other_domains[domain] = u
-            root_urls.extend(other_domains.values())
+            
+            # Sort other domains to have stable root order (but main is still first)
+            for d in sorted(other_domains.keys()):
+                root_urls.append(other_domains[d])
             
             self.log_output.append(f"Automatically selected {len(selected_urls)} URLs for {self.current_docset['name']}.")
         else:
@@ -450,7 +454,7 @@ class MainWindow(QMainWindow):
     def on_generation_finished(self):
         self.log_output.append(f"Finished generating {self.current_docset['name']}.")
         if not self.docsets_queue:
-             QMessageBox.information(self, "Done", "All docsets generated successfully.")
+            self.log_output.append('<br><font color="green"><b>Done: All docsets generated successfully.</b></font>')
         self.process_next_docset()
 
     def update_progress(self, current, total):
@@ -459,7 +463,7 @@ class MainWindow(QMainWindow):
 
     def on_error(self, message):
         self.generate_btn.setEnabled(True)
-        QMessageBox.critical(self, "Error", f"An error occurred: {message}")
+        self.log_output.append(f'<br><font color="red"><b>Error: {message}</b></font>')
 
 def main():
     app = QApplication(sys.argv)

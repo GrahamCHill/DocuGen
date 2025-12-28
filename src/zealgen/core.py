@@ -104,6 +104,12 @@ async def scan(urls, js=False, max_pages=10, progress_callback=None, fetcher_typ
     return sorted(list(discovered))
 
 async def generate(urls, output, js=False, max_pages=100, progress_callback=None, allowed_urls=None, fetcher_type="playwright"):
+    if not urls:
+        return
+
+    main_url = urls[0]
+    norm_main_url = normalize_url(main_url)
+
     if js:
         if fetcher_type == "qt" and QtFetcher:
             fetcher = QtFetcher()
@@ -229,6 +235,10 @@ async def generate(urls, output, js=False, max_pages=100, progress_callback=None
                 a["href"] = next_url
         
         updated_html = await rewrite_assets(str(soup), url, doc_dir)
+        
+        # Determine norm_url for comparison with main_url
+        norm_url = normalize_url(url)
+        
         pages_count += 1
         
         # Ensure DOCTYPE exists
@@ -238,7 +248,8 @@ async def generate(urls, output, js=False, max_pages=100, progress_callback=None
         for parser in PARSERS:
             if parser.matches(updated_html):
                 parsed = parser.parse(updated_html)
-                builder.add_page(parsed, url)
+                is_main = (norm_url == norm_main_url)
+                builder.add_page(parsed, url, is_main=is_main)
                 break
 
     if progress_callback:

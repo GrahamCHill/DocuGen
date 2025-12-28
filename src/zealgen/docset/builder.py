@@ -39,9 +39,9 @@ class DocsetBuilder:
         except Exception as e:
             print(f"Failed to set icon: {e}")
 
-    def add_page(self, parsed_page, url):
+    def add_page(self, parsed_page, url, is_main=False):
         filename = get_filename_from_url(url)
-        if not self.first_page:
+        if is_main or not self.first_page:
             self.first_page = filename
             
         dest_path = os.path.join(self.documents_path, filename)

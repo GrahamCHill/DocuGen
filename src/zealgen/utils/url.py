@@ -109,12 +109,15 @@ def get_filename_from_url(url: str) -> str:
     # Replace characters that are not safe for filenames
     # We keep the dot in the domain if possible, but the path parts are usually joined by underscores
     filename = full_path.replace("/", "_")
-    # We replace dots only if they are not the ones we want to keep (like in domain or extensions)
-    # Actually, let's just replace all dots with underscores for maximum safety as before,
-    # UNLESS the user specifically complained about the underscore version of the domain.
-    # The user said "use the domain name". "raylib_com" is not the domain name. "raylib.com" is.
-    # Let's try keeping dots.
     
+    # If it's a root domain without a path, it might end up being just "domain"
+    # we want to ensure it has .html if it's meant to be a page.
     if not (filename.endswith(".html") or filename.endswith(".htm")):
         filename += ".html"
+    
+    # Check if the filename is literally "index.html" (which shouldn't happen with domain prepended)
+    # or if it's the domain's index. 
+    # The user might prefer a cleaner "index.html" for the main page.
+    # But for now, consistency is better.
+    
     return filename
