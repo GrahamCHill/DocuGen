@@ -7,7 +7,7 @@ from ..utils.url import get_filename_from_url, normalize_url, clean_domain
 from urllib.parse import urlparse
 
 class DocsetBuilder:
-    def __init__(self, output_path, main_url=None):
+    def __init__(self, output_path, main_url=None, log_callback=None):
         self.docset_name = os.path.basename(output_path).replace(".docset", "")
         self.base_path = output_path
         self.contents_path = os.path.join(self.base_path, "Contents")
@@ -22,6 +22,13 @@ class DocsetBuilder:
         self.main_domain = clean_domain(urlparse(main_url).netloc) if main_url else None
         self.all_pages = [] # List of (filename, url)
         self.has_icon = False
+        self.log_callback = log_callback
+
+    def log(self, message):
+        if self.log_callback:
+            self.log_callback(message)
+        else:
+            print(message)
 
     def _setup_directories(self):
         if os.path.exists(self.base_path):
@@ -42,7 +49,7 @@ class DocsetBuilder:
                         f.write(r.content)
                     self.has_icon = True
         except Exception as e:
-            print(f"Failed to set icon: {e}")
+            self.log(f"Failed to set icon: {e}")
 
     def add_page(self, parsed_page, url, is_main=False):
         filename = get_filename_from_url(url)
@@ -71,8 +78,20 @@ class DocsetBuilder:
             self.index.add_entry(name, type_, path)
 
     def finalize(self):
-        self._write_info_plist()
+        index_file = self._write_info_plist()
+        self._write_links_list()
         self.index.close()
+        self.log(f"Docset finalized. Main page set to: {index_file}")
+
+    def _write_links_list(self):
+        links_file = self.base_path + ".links.txt"
+        try:
+            with open(links_file, "w", encoding="utf-8") as f:
+                for filename, url in self.all_pages:
+                    f.write(f"{filename}, {url}\n")
+            self.log(f"Links list created at: {links_file}")
+        except Exception as e:
+            self.log(f"Failed to create links list: {e}")
 
     def _write_info_plist(self):
         index_file = self.main_page
@@ -116,3 +135,4 @@ class DocsetBuilder:
         }
         with open(os.path.join(self.contents_path, "Info.plist"), "wb") as f:
             plistlib.dump(info, f)
+        return index_file

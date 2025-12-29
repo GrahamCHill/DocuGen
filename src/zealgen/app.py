@@ -3,13 +3,14 @@ import anyio
 import os
 import platform
 import subprocess
+import plistlib
 from urllib.parse import urlparse
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QPushButton, QListWidget, QFileDialog, QCheckBox,
     QLabel, QTextEdit, QMessageBox, QProgressBar, QDialog,
     QListWidgetItem, QInputDialog, QComboBox, QTreeWidget, QTreeWidgetItem,
-    QTableWidget, QTableWidgetItem, QHeaderView
+    QTableWidget, QTableWidgetItem, QHeaderView, QTabWidget
 )
 from PySide6.QtCore import Qt, QThread, Signal, QStandardPaths
 from .core import generate, scan
@@ -18,6 +19,7 @@ from .utils.url import normalize_url, clean_domain
 class ScanWorker(QThread):
     finished = Signal(list)
     error = Signal(str)
+    log = Signal(str)
     progress = Signal(int, int)
 
     def __init__(self, urls, js, fetcher_type="playwright"):
@@ -31,7 +33,7 @@ class ScanWorker(QThread):
             def report_progress(current, total):
                 self.progress.emit(current, total)
 
-            discovered = anyio.run(scan, self.urls, self.js, 20, report_progress, self.fetcher_type)
+            discovered = anyio.run(scan, self.urls, self.js, 20, report_progress, self.fetcher_type, self.log.emit)
             self.finished.emit(discovered)
         except Exception as e:
             self.error.emit(str(e))
@@ -61,7 +63,7 @@ class MultiWorker(QThread):
                 def report_progress(current, total):
                     self.progress.emit(current, total)
 
-                anyio.run(generate, urls, output_path, self.js, 100, report_progress, allowed_urls, self.fetcher_type)
+                anyio.run(generate, urls, output_path, self.js, 100, report_progress, allowed_urls, self.fetcher_type, self.log.emit)
             
             self.finished.emit()
         except Exception as e:
@@ -129,13 +131,13 @@ class URLSelectionDialog(QDialog):
         for domain in sorted(other_urls_by_domain.keys()):
             domain_item = QTreeWidgetItem(self.other_tree)
             domain_item.setText(0, domain)
-            domain_item.setCheckState(0, Qt.Checked)
+            domain_item.setCheckState(0, Qt.Unchecked)
             domain_item.setFlags(domain_item.flags() | Qt.ItemIsAutoTristate | Qt.ItemIsUserCheckable)
             
             for url in sorted(other_urls_by_domain[domain]):
                 url_item = QTreeWidgetItem(domain_item)
                 url_item.setText(0, url)
-                url_item.setCheckState(0, Qt.Checked)
+                url_item.setCheckState(0, Qt.Unchecked)
                 url_item.setFlags(url_item.flags() | Qt.ItemIsUserCheckable)
 
         btns = QHBoxLayout()
@@ -222,17 +224,146 @@ class URLSelectionDialog(QDialog):
                     
         return selected, roots
 
+class DocsetEditWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.docset_path = None
+        self.plist_path = None
+        self.documents_path = None
+
+        layout = QVBoxLayout(self)
+
+        # Docset selection
+        load_layout = QHBoxLayout()
+        self.path_input = QLineEdit()
+        self.path_input.setPlaceholderText("Select a .docset folder...")
+        self.path_input.setReadOnly(True)
+        load_layout.addWidget(self.path_input)
+
+        browse_btn = QPushButton("Browse...")
+        browse_btn.clicked.connect(self.browse_docset)
+        load_layout.addWidget(browse_btn)
+        layout.addLayout(load_layout)
+
+        # Current frontpage
+        self.current_fp_label = QLabel("Current Frontpage: None")
+        layout.addWidget(self.current_fp_label)
+
+        # Filter
+        filter_layout = QHBoxLayout()
+        filter_layout.addWidget(QLabel("Filter:"))
+        self.filter_input = QLineEdit()
+        self.filter_input.textChanged.connect(self.filter_list)
+        filter_layout.addWidget(self.filter_input)
+        layout.addLayout(filter_layout)
+
+        # File list
+        layout.addWidget(QLabel("Select New Frontpage:"))
+        self.file_list = QListWidget()
+        layout.addWidget(self.file_list)
+
+        # Save button
+        self.save_btn = QPushButton("Update Info.plist")
+        self.save_btn.clicked.connect(self.save_changes)
+        self.save_btn.setEnabled(False)
+        layout.addWidget(self.save_btn)
+
+    def browse_docset(self):
+        path = QFileDialog.getExistingDirectory(self, "Select Docset Folder", "", QFileDialog.ShowDirsOnly)
+        if path:
+            if not path.endswith(".docset"):
+                QMessageBox.warning(self, "Invalid Folder", "Please select a folder ending in .docset")
+                return
+            self.load_docset(path)
+
+    def load_docset(self, path):
+        self.docset_path = path
+        self.plist_path = os.path.join(path, "Contents", "Info.plist")
+        self.documents_path = os.path.join(path, "Contents", "Resources", "Documents")
+
+        if not os.path.exists(self.plist_path):
+            QMessageBox.critical(self, "Error", f"Could not find Info.plist at {self.plist_path}")
+            return
+
+        if not os.path.exists(self.documents_path):
+            QMessageBox.critical(self, "Error", f"Could not find Documents folder at {self.documents_path}")
+            return
+
+        self.path_input.setText(path)
+        
+        try:
+            with open(self.plist_path, "rb") as f:
+                plist = plistlib.load(f)
+                current_fp = plist.get("dashIndexFilePath", "Not set")
+                self.current_fp_label.setText(f"Current Frontpage: {current_fp}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to read Info.plist: {e}")
+            return
+
+        self.refresh_file_list()
+        self.save_btn.setEnabled(True)
+
+    def refresh_file_list(self):
+        self.file_list.clear()
+        if not self.documents_path:
+            return
+
+        html_files = []
+        for root, dirs, files in os.walk(self.documents_path):
+            for file in files:
+                if file.endswith(".html") or file.endswith(".htm"):
+                    rel_path = os.path.relpath(os.path.join(root, file), self.documents_path)
+                    html_files.append(rel_path)
+        
+        html_files.sort()
+        self.file_list.addItems(html_files)
+
+    def filter_list(self, text):
+        for i in range(self.file_list.count()):
+            item = self.file_list.item(i)
+            item.setHidden(text.lower() not in item.text().lower())
+
+    def save_changes(self):
+        selected = self.file_list.selectedItems()
+        if not selected:
+            QMessageBox.warning(self, "No Selection", "Please select a file from the list.")
+            return
+
+        new_fp = selected[0].text()
+        
+        try:
+            with open(self.plist_path, "rb") as f:
+                plist = plistlib.load(f)
+            
+            plist["dashIndexFilePath"] = new_fp
+            
+            with open(self.plist_path, "wb") as f:
+                plistlib.dump(plist, f)
+            
+            self.current_fp_label.setText(f"Current Frontpage: {new_fp}")
+            QMessageBox.information(self, "Success", f"Updated Info.plist with frontpage: {new_fp}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to update Info.plist: {e}")
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("ZealGen")
         self.setMinimumSize(600, 400)
 
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        layout = QVBoxLayout(central_widget)
+        self.tabs = QTabWidget()
+        self.setCentralWidget(self.tabs)
 
-        # URL Table
+        # Tab 1: Generator
+        generator_widget = QWidget()
+        self.tabs.addTab(generator_widget, "Generator")
+        layout = QVBoxLayout(generator_widget)
+
+        # Tab 2: Edit Docset
+        self.edit_widget = DocsetEditWidget()
+        self.tabs.addTab(self.edit_widget, "Edit Docset")
+
+        # URL Table (rest of the original UI goes into layout)
         layout.addWidget(QLabel("URLs and Docset Names:"))
         self.url_table = QTableWidget(0, 2)
         self.url_table.setHorizontalHeaderLabels(["URL", "Docset Name"])
@@ -384,6 +515,7 @@ class MainWindow(QMainWindow):
         self.scan_worker.finished.connect(self.on_scan_finished)
         self.scan_worker.error.connect(self.on_error)
         self.scan_worker.progress.connect(self.update_progress)
+        self.scan_worker.log.connect(lambda m: self.log_output.append(m))
         self.scan_worker.start()
 
     def on_scan_finished(self, discovered_urls):
@@ -392,32 +524,18 @@ class MainWindow(QMainWindow):
         selected_urls = []
         root_urls = []
         if self.ignore_optional:
-            # If ignore optional, we take only the initial URL or all discovered?
-            # Usually "ignore optional" means just do it automatically with defaults.
-            # In the dialog, mandatory URLs are initial URLs. 
-            # If we ignore optional, maybe we just want to download everything discovered?
-            # Or just the main site? 
-            # The user said "ignore optional outright and then it just does it automatically".
-            # In URLSelectionDialog, everything is checked by default EXCEPT mandatory which are always in.
-            # So I'll take ALL discovered URLs if ignore_optional is True.
-            selected_urls = discovered_urls
+            # If ignore optional, we only take the URLs that match the initial domains
+            initial_domains = {clean_domain(urlparse(u).netloc) for u in [self.current_docset['url']]}
+            
+            selected_urls = []
+            for u in discovered_urls:
+                if clean_domain(urlparse(u).netloc) in initial_domains:
+                    selected_urls.append(u)
+            
             main_url = self.current_docset['url']
             root_urls = [main_url]
-            # Also add other domains as roots if they are in discovered_urls
-            # We only add the shortest URL for each unique domain to avoid redundant roots
-            initial_domain = clean_domain(urlparse(main_url).netloc)
-            other_domains = {}
-            for u in discovered_urls:
-                domain = clean_domain(urlparse(u).netloc)
-                if domain != initial_domain:
-                    if domain not in other_domains or len(u) < len(other_domains[domain]):
-                        other_domains[domain] = u
             
-            # Sort other domains to have stable root order (but main is still first)
-            for d in sorted(other_domains.keys()):
-                root_urls.append(other_domains[d])
-            
-            self.log_output.append(f"Automatically selected {len(selected_urls)} URLs for {self.current_docset['name']}.")
+            self.log_output.append(f"Automatically selected {len(selected_urls)} URLs for {self.current_docset['name']} (ignored {len(discovered_urls) - len(selected_urls)} out-of-domain URLs).")
         else:
             dialog = URLSelectionDialog(discovered_urls, [self.current_docset['url']], self)
             dialog.setWindowTitle(f"Select URLs for {self.current_docset['name']}")

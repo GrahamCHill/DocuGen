@@ -12,7 +12,7 @@ from .parsers import sphinx, docusaurus, rustdoc, generic
 from .docset.builder import DocsetBuilder
 from .assets.rewrite import rewrite_assets, get_favicon_url
 
-from .utils.url import get_filename_from_url, normalize_url
+from .utils.url import get_filename_from_url, normalize_url, clean_domain
 
 PARSERS = [
     sphinx.SphinxParser(),
@@ -21,7 +21,13 @@ PARSERS = [
     generic.GenericParser(),
 ]
 
-async def scan(urls, js=False, max_pages=10, progress_callback=None, fetcher_type="playwright"):
+async def scan(urls, js=False, max_pages=10, progress_callback=None, fetcher_type="playwright", log_callback=None):
+    def log(message):
+        if log_callback:
+            log_callback(message)
+        else:
+            print(message)
+
     if js:
         if fetcher_type == "qt" and QtFetcher:
             fetcher = QtFetcher()
@@ -56,12 +62,12 @@ async def scan(urls, js=False, max_pages=10, progress_callback=None, fetcher_typ
                     break
                 except Exception as e:
                     if attempt == max_retries - 1:
-                        print(f"Final attempt failed for {url}: {e}")
+                        log(f"Final attempt failed for {url}: {e}")
                         raise e
-                    print(f"Retry {attempt + 1}/{max_retries} for {url} due to: {e}")
+                    log(f"Retry {attempt + 1}/{max_retries} for {url} due to: {e}")
                     await anyio.sleep(2 * (attempt + 1)) # Simple backoff
         except Exception as e:
-            print(f"Failed to fetch {url} after {max_retries} attempts: {e}")
+            log(f"Failed to fetch {url} after {max_retries} attempts: {e}")
             continue
 
         pages_count += 1
@@ -99,9 +105,11 @@ async def scan(urls, js=False, max_pages=10, progress_callback=None, fetcher_typ
                 # More robust within-doc check for scanning too
                 is_within_doc = False
                 next_parsed = urlparse(clean_url)
+                next_domain = clean_domain(next_parsed.netloc)
                 for start_url in urls:
                     start_parsed = urlparse(start_url)
-                    if next_parsed.netloc == start_parsed.netloc:
+                    start_domain = clean_domain(start_parsed.netloc)
+                    if next_domain == start_domain:
                         base_path = start_parsed.path.rsplit('/', 1)[0]
                         if not base_path.endswith('/'): base_path += '/'
                         
@@ -110,7 +118,7 @@ async def scan(urls, js=False, max_pages=10, progress_callback=None, fetcher_typ
                             is_within_doc = True
                             break
                         
-                        # Heuristic for related paths
+                        # Heuristic for related patterns on same domain
                         related_patterns = ["/examples", "/samples", "/demo", "/docs", "/api", "/manual"]
                         is_related = any(p in next_parsed.path.lower() for p in related_patterns)
                         if is_related:
@@ -120,12 +128,17 @@ async def scan(urls, js=False, max_pages=10, progress_callback=None, fetcher_typ
                 if is_within_doc:
                     if len(visited) < max_pages:
                         queue.append(clean_url)
-                
-                discovered.add(clean_url)
+                    discovered.add(clean_url)
 
     return sorted(list(discovered))
 
-async def generate(urls, output, js=False, max_pages=100, progress_callback=None, allowed_urls=None, fetcher_type="playwright"):
+async def generate(urls, output, js=False, max_pages=100, progress_callback=None, allowed_urls=None, fetcher_type="playwright", log_callback=None):
+    def log(message):
+        if log_callback:
+            log_callback(message)
+        else:
+            print(message)
+
     if not urls:
         return
 
@@ -139,7 +152,7 @@ async def generate(urls, output, js=False, max_pages=100, progress_callback=None
             fetcher = PlaywrightFetcher()
     else:
         fetcher = HttpxFetcher()
-    builder = DocsetBuilder(output, main_url=main_url)
+    builder = DocsetBuilder(output, main_url=main_url, log_callback=log_callback)
     doc_dir = pathlib.Path(builder.documents_path)
     
     visited = set()
@@ -175,12 +188,12 @@ async def generate(urls, output, js=False, max_pages=100, progress_callback=None
                     break
                 except Exception as e:
                     if attempt == max_retries - 1:
-                        print(f"Final attempt failed for {url}: {e}")
+                        log(f"Final attempt failed for {url}: {e}")
                         raise e
-                    print(f"Retry {attempt + 1}/{max_retries} for {url} due to: {e}")
+                    log(f"Retry {attempt + 1}/{max_retries} for {url} due to: {e}")
                     await anyio.sleep(2 * (attempt + 1)) # Simple backoff
         except Exception as e:
-            print(f"Failed to fetch {url} after {max_retries} attempts: {e}")
+            log(f"Failed to fetch {url} after {max_retries} attempts: {e}")
             continue
 
         if not builder.has_icon:
@@ -218,19 +231,13 @@ async def generate(urls, output, js=False, max_pages=100, progress_callback=None
                 anchor = next_url.split("#")[1] if "#" in next_url else None
             
             next_parsed = urlparse(clean_url)
+            next_domain = clean_domain(next_parsed.netloc)
             
             # Decision to follow link:
             # 1. If it's explicitly in allowed_urls
             # 2. OR if it matches the domain/path heuristic (stay within same documentation)
             is_allowed = bool(allowed_urls and normalize_url(clean_url) in allowed_urls)
             
-            # Check if it matches any of the root URLs domains (even if not in same path)
-            is_root_domain = False
-            for start_url in urls:
-                if next_parsed.netloc == urlparse(start_url).netloc:
-                    is_root_domain = True
-                    break
-
             # More robust within-doc check
             # We want to stay on the same domain and at or below the base path of the starting URLs
             is_within_doc = False
@@ -242,7 +249,8 @@ async def generate(urls, output, js=False, max_pages=100, progress_callback=None
 
             for start_url in urls:
                 start_parsed = urlparse(start_url)
-                if next_parsed.netloc == start_parsed.netloc:
+                start_domain = clean_domain(start_parsed.netloc)
+                if next_domain == start_domain:
                     # Check if next_url is under the same base path
                     base_path = start_parsed.path.rsplit('/', 1)[0]
                     if not base_path.endswith('/'):
@@ -254,14 +262,14 @@ async def generate(urls, output, js=False, max_pages=100, progress_callback=None
                         is_within_doc = True
                         break
                     
-                    # Heuristic for related paths
+                    # Heuristic for related paths on same domain
                     related_patterns = ["/examples", "/samples", "/demo", "/docs", "/api", "/manual"]
                     is_related = any(p in next_parsed.path.lower() for p in related_patterns)
                     if is_related:
                         is_within_doc = True
                         break
             
-            if is_allowed or is_within_doc or is_root_domain:
+            if is_allowed or is_within_doc:
                 if next_url_is_same_page and anchor and element.name == "a":
                     element[attr] = f"#{anchor}"
                 else:
