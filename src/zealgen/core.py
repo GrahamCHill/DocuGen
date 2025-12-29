@@ -102,6 +102,9 @@ async def scan(urls, js=False, max_pages=10, progress_callback=None, fetcher_typ
             norm_url = normalize_url(clean_url)
             
             if norm_url not in visited and norm_url not in queue:
+                # Add to discovered even if not within doc, so user can choose it
+                discovered.add(clean_url)
+
                 # More robust within-doc check for scanning too
                 is_within_doc = False
                 next_parsed = urlparse(clean_url)
@@ -128,7 +131,6 @@ async def scan(urls, js=False, max_pages=10, progress_callback=None, fetcher_typ
                 if is_within_doc:
                     if len(visited) < max_pages:
                         queue.append(clean_url)
-                    discovered.add(clean_url)
 
     return sorted(list(discovered))
 

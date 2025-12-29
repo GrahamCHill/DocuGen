@@ -116,10 +116,13 @@ class URLSelectionDialog(QDialog):
                 if normalized in self.initial_urls:
                     # Mandatory: Original input URLs
                     item.setText(f"{url} *")
+                    item.setData(Qt.UserRole, True) # Mark as mandatory
                     self.related_list.addItem(item)
                 else:
                     # Optional subpage on the same domain
                     item.setCheckState(Qt.Checked)
+                    item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                    item.setData(Qt.UserRole, False)
                     self.related_list.addItem(item)
             else:
                 # Other domains go to the right tree
@@ -171,6 +174,12 @@ class URLSelectionDialog(QDialog):
         self.other_tree.blockSignals(False)
 
     def select_all_optional(self):
+        # Select all in the related list
+        for i in range(self.related_list.count()):
+            item = self.related_list.item(i)
+            if item.checkState() is not None:
+                item.setCheckState(Qt.Checked)
+
         # Select all in the other tree
         for i in range(self.other_tree.topLevelItemCount()):
             item = self.other_tree.topLevelItem(i)
@@ -179,6 +188,12 @@ class URLSelectionDialog(QDialog):
                 item.child(j).setCheckState(0, Qt.Checked)
 
     def deselect_all_optional(self):
+        # Deselect all in the related list
+        for i in range(self.related_list.count()):
+            item = self.related_list.item(i)
+            if item.checkState() is not None:
+                item.setCheckState(Qt.Unchecked)
+
         # Deselect all in the other tree
         for i in range(self.other_tree.topLevelItemCount()):
             item = self.other_tree.topLevelItem(i)
@@ -192,8 +207,9 @@ class URLSelectionDialog(QDialog):
         # Process related_list
         for i in range(self.related_list.count()):
             item = self.related_list.item(i)
-            # If it has no checkbox, it's mandatory
-            if item.checkState() is None:
+            is_mandatory = item.data(Qt.UserRole)
+            
+            if is_mandatory:
                 # Strip the mandatory marker if present
                 text = item.text()
                 if text.endswith(" *"):
@@ -269,7 +285,12 @@ class DocsetEditWidget(QWidget):
         layout.addWidget(self.save_btn)
 
     def browse_docset(self):
-        path = QFileDialog.getExistingDirectory(self, "Select Docset Folder", "", QFileDialog.ShowDirsOnly)
+        if platform.system() == "Darwin":
+            # On macOS, .docset is a package/bundle. getOpenFileName can select it.
+            path, _ = QFileDialog.getOpenFileName(self, "Select Docset", "", "Docset (*.docset)")
+        else:
+            path = QFileDialog.getExistingDirectory(self, "Select Docset Folder", "", QFileDialog.ShowDirsOnly)
+        
         if path:
             if not path.endswith(".docset"):
                 QMessageBox.warning(self, "Invalid Folder", "Please select a folder ending in .docset")
@@ -294,16 +315,16 @@ class DocsetEditWidget(QWidget):
         try:
             with open(self.plist_path, "rb") as f:
                 plist = plistlib.load(f)
-                current_fp = plist.get("dashIndexFilePath", "Not set")
-                self.current_fp_label.setText(f"Current Frontpage: {current_fp}")
+                current_fp = plist.get("dashIndexFilePath", "")
+                self.current_fp_label.setText(f"Current Frontpage: {current_fp if current_fp else 'Not set'}")
+                self.refresh_file_list(current_fp)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to read Info.plist: {e}")
             return
 
-        self.refresh_file_list()
         self.save_btn.setEnabled(True)
 
-    def refresh_file_list(self):
+    def refresh_file_list(self, current_fp=None):
         self.file_list.clear()
         if not self.documents_path:
             return
@@ -317,6 +338,12 @@ class DocsetEditWidget(QWidget):
         
         html_files.sort()
         self.file_list.addItems(html_files)
+
+        if current_fp:
+            items = self.file_list.findItems(current_fp, Qt.MatchExactly)
+            if items:
+                items[0].setSelected(True)
+                self.file_list.scrollToItem(items[0])
 
     def filter_list(self, text):
         for i in range(self.file_list.count()):

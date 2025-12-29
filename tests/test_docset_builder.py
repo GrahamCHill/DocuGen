@@ -22,7 +22,8 @@ class TestDocsetBuilder(unittest.TestCase):
 
     def test_add_page(self):
         builder = DocsetBuilder(self.output_path)
-        page = ParsedPage("Title", "<html><body>Content</body></html>", [("Sym", "Type", "anchor")])
+        # Use a page without a title to avoid extra entries in the index
+        page = ParsedPage(None, "<html><body>Content</body></html>", [("Sym", "Type", "anchor")])
         builder.add_page(page, "https://example.com/page")
         
         expected_file = os.path.join(builder.documents_path, "example.com_page.html")
