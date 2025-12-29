@@ -62,6 +62,10 @@ class DocsetBuilder:
         with open(dest_path, "w", encoding="utf-8") as f:
             f.write(parsed_page.content)
 
+        # Use page title for search index if it exists
+        if parsed_page.title:
+            self.index.add_entry(parsed_page.title, "Guide", filename)
+
         for name, type_, anchor in parsed_page.symbols:
             path = f"{filename}#{anchor}" if anchor else filename
             self.index.add_entry(name, type_, path)

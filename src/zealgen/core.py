@@ -286,7 +286,9 @@ async def generate(urls, output, js=False, max_pages=100, progress_callback=None
         norm_url = normalize_url(url)
         # Also check against the final URL in case of redirects
         norm_final_url = normalize_url(result.url)
-        is_main = (norm_url == norm_main_url or norm_final_url == norm_main_url)
+        
+        # The first URL in the list is always considered the main page
+        is_main = (url == urls[0] or norm_url == norm_main_url or norm_final_url == norm_main_url)
         
         pages_count += 1
         

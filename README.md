@@ -98,6 +98,13 @@ The project uses `pytest` for unit testing.
 PYTHONPATH=src python3 -m unittest discover tests
 ```
 
+## Documentation
+
+For more detailed information, see the [docs](docs/index.md) directory:
+
+- [Architecture](docs/architecture.md)
+- [Frontpage Handling](docs/frontpage_handling.md)
+
 ## License
 
 This project is licensed under the GPLv3 License - see the [LICENSE](LICENSE) file for details.

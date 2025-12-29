@@ -13,8 +13,16 @@ class DocsetIndex:
         self.conn.execute(
             "CREATE TABLE searchIndex(id INTEGER PRIMARY KEY, name TEXT, type TEXT, path TEXT)"
         )
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS anchor ON searchIndex (name, type, path)"
+        )
 
     def add_entry(self, name, type, path):
+        # Dash documentation recommends stripping tags from names and ensuring they aren't empty
+        name = name.strip()
+        if not name:
+            return
+            
         self.conn.execute(
             "INSERT OR IGNORE INTO searchIndex(name, type, path) VALUES (?, ?, ?)",
             (name, type, path),
