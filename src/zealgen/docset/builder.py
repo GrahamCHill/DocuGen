@@ -84,34 +84,31 @@ class DocsetBuilder:
             # 2. Look for FrontPage from the primary domain
             if not index_file and self.main_domain:
                 for filename, _ in self.all_pages:
-                    if filename.startswith(self.main_domain + "_") and "FrontPage" in filename:
+                    if filename.startswith(self.main_domain) and "FrontPage" in filename:
                         index_file = filename
                         break
             
             # 3. Look for ANY page from the primary domain
             if not index_file and self.main_domain:
                 for filename, _ in self.all_pages:
-                    if filename.startswith(self.main_domain + "_"):
+                    if filename.startswith(self.main_domain):
                         index_file = filename
                         break
 
-            # Only allow fallbacks if no main domain was specified
-            # or if they belong to the main domain (though steps 1-3 already covered that)
-            if not index_file and not self.main_domain:
-                # 4. Fallback to literal index.html
-                if os.path.exists(os.path.join(self.documents_path, "index.html")):
-                    index_file = "index.html"
-                
-                # 5. Fallback to the first page processed
-                if not index_file:
-                    index_file = self.first_page
+            # 4. Fallback to literal index.html
+            if not index_file and os.path.exists(os.path.join(self.documents_path, "index.html")):
+                index_file = "index.html"
+            
+            # 5. Fallback to the first page processed
+            if not index_file:
+                index_file = self.first_page or "index.html"
 
         info = {
             "CFBundleIdentifier": self.docset_name.lower(),
             "CFBundleName": self.docset_name,
             "DocSetPlatformFamily": self.docset_name.lower(),
             "isDashDocset": True,
-            "dashIndexFilePath": index_file or "index.html",
+            "dashIndexFilePath": index_file,
         }
         with open(os.path.join(self.contents_path, "Info.plist"), "wb") as f:
             plistlib.dump(info, f)
