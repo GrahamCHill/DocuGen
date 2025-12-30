@@ -18,7 +18,15 @@ class PlaywrightFetcher(Fetcher):
                     raise e
                     
                 page = await browser.new_page()
-                await page.goto(url, wait_until="networkidle")
+                
+                try:
+                    # Using a shorter timeout for navigation that might be a download
+                    await page.goto(url, wait_until="networkidle", timeout=30000)
+                except Exception as e:
+                    if "Download is starting" in str(e):
+                        await browser.close()
+                        return FetchResult(url, f"<html><body>Download started for {url}</body></html>")
+                    raise e
                 
                 # Wait for any JS to finish rendering content
                 await page.wait_for_timeout(5000)
