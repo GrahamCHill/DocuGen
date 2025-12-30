@@ -1,5 +1,5 @@
 [project]
-name = "zealgen"
+name = "docugen"
 version = "0.1.0"
 description = "Qt6 tool to generate Zeal docsets from URLs"
 requires-python = ">=3.11"

@@ -363,7 +363,7 @@ class DocsetEditWidget(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("ZealGen")
+        self.setWindowTitle("DocuGen")
         self.setMinimumSize(600, 400)
 
         self.tabs = QTabWidget()
