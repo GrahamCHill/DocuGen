@@ -19,6 +19,36 @@ class PlaywrightFetcher(Fetcher):
                     
                 page = await browser.new_page()
                 
+                # Store WASM binaries found during navigation
+                wasm_binaries = {}
+
+                async def intercept_route(route):
+                    try:
+                        response = await route.fetch()
+                        if ".wasm" in route.request.url.split('?')[0]:
+                            body = await response.body()
+                            # Store with absolute URL
+                            wasm_binaries[route.request.url] = body
+                            
+                            # If the server returned wrong MIME type, fix it for the browser
+                            headers = response.headers.copy()
+                            if "application/wasm" not in headers.get("content-type", "").lower():
+                                headers["content-type"] = "application/wasm"
+                                await route.fulfill(
+                                    response=response,
+                                    headers=headers,
+                                    body=body
+                                )
+                                return
+                        await route.continue_()
+                    except Exception:
+                        try:
+                            await route.continue_()
+                        except:
+                            pass
+
+                await page.route("**/*", intercept_route)
+
                 try:
                     # Using a shorter timeout for navigation that might be a download
                     await page.goto(url, wait_until="networkidle", timeout=30000)
@@ -163,6 +193,87 @@ class PlaywrightFetcher(Fetcher):
                     await page.wait_for_timeout(1000)
 
                 html = await page.content()
+
+                # Embed collected WASM binaries into the HTML
+                if wasm_binaries:
+                    import base64
+                    from bs4 import BeautifulSoup
+                    soup = BeautifulSoup(html, "lxml")
+                    
+                    if not soup.body:
+                        # Fallback if no body
+                        body_tag = soup.new_tag("body")
+                        soup.append(body_tag)
+                    
+                    # Add a script for each WASM
+                    for wasm_url, wasm_body in wasm_binaries.items():
+                        wasm_b64 = base64.b64encode(wasm_body).decode('utf-8')
+                        wasm_script = soup.new_tag("script")
+                        wasm_script["type"] = "application/wasm-embedded"
+                        wasm_script["data-wasm-url"] = wasm_url
+                        wasm_script.string = wasm_b64
+                        soup.body.append(wasm_script)
+                    
+                    # Add the shim script
+                    shim_script = soup.new_tag("script")
+                    shim_script.string = """
+                    (function() {
+                        const originalFetch = window.fetch;
+                        window.fetch = async function(url, options) {
+                            const urlString = url.toString();
+                            const absoluteUrl = new URL(urlString, window.location.href).href;
+                            
+                            // Try exact match first, then try matching by filename
+                            let embedded = document.querySelector(`script[type="application/wasm-embedded"][data-wasm-url="${absoluteUrl}"]`);
+                            
+                            if (!embedded) {
+                                const filename = urlString.split('/').pop().split('?')[0];
+                                embedded = Array.from(document.querySelectorAll('script[type="application/wasm-embedded"]'))
+                                    .find(s => {
+                                        const storedUrl = s.getAttribute('data-wasm-url');
+                                        return storedUrl.split('/').pop().split('?')[0] === filename;
+                                    });
+                            }
+
+                            if (embedded) {
+                                const binaryString = atob(embedded.textContent);
+                                const bytes = new Uint8Array(binaryString.length);
+                                for (let i = 0; i < binaryString.length; i++) {
+                                    bytes[i] = binaryString.charCodeAt(i);
+                                }
+                                return new Response(bytes, {
+                                    status: 200,
+                                    statusText: 'OK',
+                                    headers: { 'Content-Type': 'application/wasm' }
+                                });
+                            }
+                            return originalFetch(url, options);
+                        };
+
+                        // Also shim instantiateStreaming
+                        const originalInstantiateStreaming = WebAssembly.instantiateStreaming;
+                        WebAssembly.instantiateStreaming = async function(source, importObject) {
+                            try {
+                                return await originalInstantiateStreaming(source, importObject);
+                            } catch (e) {
+                                if (source instanceof Promise || source instanceof Response) {
+                                    const response = (source instanceof Promise) ? await source : source;
+                                    const buffer = await response.arrayBuffer();
+                                    return WebAssembly.instantiate(buffer, importObject);
+                                }
+                                throw e;
+                            }
+                        };
+                    })();
+                    """
+                    # Insert shim at the beginning of head or body
+                    if soup.head:
+                        soup.head.insert(0, shim_script)
+                    else:
+                        soup.body.insert(0, shim_script)
+                    
+                    html = str(soup)
+
                 final_url = page.url
                 await browser.close()
                 return FetchResult(final_url, html)
