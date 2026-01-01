@@ -43,40 +43,19 @@ def is_url_within_doc(url, start_urls, related_patterns=None):
         start_domain = clean_domain(start_parsed.netloc)
         start_base_domain = get_base_domain(start_domain)
         
-        # 1. Exact domain match
-        if next_domain == start_domain:
-            base_path = start_parsed.path.rsplit('/', 1)[0]
-            if not base_path.endswith('/'):
-                base_path += '/'
-            
-            if next_parsed.path.startswith(base_path):
-                return True
-
-        # 2. Same base domain (e.g. wiki.libsdl.org and examples.libsdl.org)
+        # 1. Same base domain (e.g. wiki.libsdl.org and examples.libsdl.org)
+        # Any subdomain or the domain itself is allowed.
         if next_base_domain and next_base_domain == start_base_domain:
-            # For same base domain, we are more relaxed but still check for documentation-like patterns
-            # or if it's under a similar path structure.
-            is_related = any(p in next_parsed.path.lower() for p in related_patterns)
-            # Also check if netloc contains related patterns (e.g. examples.libsdl.org)
-            is_related = is_related or any(p.strip("/") in next_parsed.netloc.lower() for p in related_patterns)
-            
-            if is_related:
-                return True
-            
-            # If the start URL path is just / or /SDL3/, and the next URL is also under /SDL3/
-            # even on a different subdomain of the same base domain, it's likely related.
-            start_path = start_parsed.path
-            if start_path and start_path != "/" and next_parsed.path.startswith(start_path):
-                return True
+            return True
 
-    # 3. Heuristic for related patterns on ANY domain (maybe too broad? Let's keep it to same base domain for now
-    # but the original code was doing it for any domain if it reached there).
-    # Actually, the original code ONLY did it if next_domain == start_domain.
-    # Wait, let me re-read the original code.
+        # 2. Heuristic for related patterns on ANY domain (maybe too broad? Let's keep it to same base domain for now
+        # but the original code was doing it for any domain if it reached there).
+        # Actually, the original code ONLY did it if next_domain == start_domain.
+        # Wait, let me re-read the original code.
     
     return False
 
-async def scan(urls, js=False, max_pages=None, progress_callback=None, fetcher_type="playwright", log_callback=None, verbose_callback=None):
+async def scan(urls, js=False, max_pages=None, progress_callback=None, fetcher_type="playwright", log_callback=None, verbose_callback=None, stop_event=None):
     if max_pages is None:
         max_pages = DEFAULT_MAX_PAGES
     def log(message):
@@ -108,22 +87,40 @@ async def scan(urls, js=False, max_pages=None, progress_callback=None, fetcher_t
         fetcher.set_verbose_callback(v_log)
     
     visited = set()
-    queue = list(urls)
+    queue = []
+    # Use a set to keep track of which URLs in the queue are internal
+    for u in urls:
+        queue.append((u, True)) # (url, is_internal)
+    
     discovered = set()
-    pages_count = 0
+    external_pages_count = 0
 
-    while queue and pages_count < max_pages:
-        url = queue.pop(0)
+    while queue:
+        if stop_event and stop_event.is_set():
+            v_log("Stop requested, finishing scan early...")
+            break
+
+        url, is_internal = queue.pop(0)
         norm_url = normalize_url(url)
         if norm_url in visited:
             v_log(f"Skipping already visited: {url}")
             continue
+        
+        # If it's external, check if we've reached the limit
+        if not is_internal:
+            if external_pages_count >= max_pages:
+                v_log(f"Max external pages ({max_pages}) reached, skipping: {url}")
+                continue
+        
         visited.add(norm_url)
         discovered.add(url)
         
-        v_log(f"Processing ({pages_count + 1}/{max_pages}): {url}")
+        status_msg = f"Processing ({external_pages_count + 1 if not is_internal else 'internal'}/{max_pages if not is_internal else 'unlimited'}): {url}"
+        v_log(status_msg)
         if progress_callback:
-            progress_callback(pages_count, max_pages)
+            # We still need to pass something to progress_callback. 
+            # If we don't know the total internal pages, maybe just pass current counts.
+            progress_callback(external_pages_count, max_pages)
         
         try:
             # Add retries for robustness
@@ -143,12 +140,12 @@ async def scan(urls, js=False, max_pages=None, progress_callback=None, fetcher_t
             log(f"Failed to fetch {url} after {max_retries} attempts: {e}")
             continue
 
-        pages_count += 1
+        if not is_internal:
+            external_pages_count += 1
         
-        # Link discovery and rewriting
+        # Link discovery
         soup = BeautifulSoup(result.html, "lxml")
         current_url = result.url
-        base_parsed = urlparse(current_url)
 
         # Discovery of links in <a> tags and <iframe> src
         discovered_links = []
@@ -172,24 +169,34 @@ async def scan(urls, js=False, max_pages=None, progress_callback=None, fetcher_t
             if "#" in norm_next_url and "#" not in clean_url:
                 clean_url = next_url # Keep the hash if it was deemed important for routing
             
-            norm_url = normalize_url(clean_url)
+            norm_clean_url = normalize_url(clean_url)
             
-            if norm_url not in visited and norm_url not in queue:
+            if norm_clean_url not in visited:
                 # Add to discovered even if not within doc, so user can choose it
                 discovered.add(clean_url)
 
-                if is_url_within_doc(clean_url, urls):
-                    if len(visited) < max_pages:
-                        v_log(f"Found new link within doc: {clean_url}")
-                        queue.append(clean_url)
+                is_next_internal = is_url_within_doc(clean_url, urls)
+                
+                # Check if it's already in queue
+                already_in_queue = any(normalize_url(q_url) == norm_clean_url for q_url, _ in queue)
+                
+                if not already_in_queue:
+                    if is_next_internal:
+                        v_log(f"Found new internal link: {clean_url}")
+                        queue.append((clean_url, True))
+                    elif is_internal:
+                        # Only follow external links if they are found on an INTERNAL page
+                        if external_pages_count < max_pages:
+                            v_log(f"Found external link: {clean_url}")
+                            queue.append((clean_url, False))
+                        else:
+                            v_log(f"Max external pages reached, not adding link: {clean_url}")
                     else:
-                        v_log(f"Max pages reached, not adding link: {clean_url}")
-                else:
-                    v_log(f"Found external link: {clean_url}")
+                        v_log(f"External link found on external page, not following: {clean_url}")
 
     return sorted(list(discovered))
 
-async def generate(urls, output, js=False, max_pages=None, progress_callback=None, allowed_urls=None, fetcher_type="playwright", log_callback=None, verbose_callback=None):
+async def generate(urls, output, js=False, max_pages=None, progress_callback=None, allowed_urls=None, fetcher_type="playwright", log_callback=None, verbose_callback=None, stop_event=None):
     if max_pages is None:
         max_pages = DEFAULT_MAX_PAGES
     def log(message):
@@ -230,16 +237,23 @@ async def generate(urls, output, js=False, max_pages=None, progress_callback=Non
     doc_dir = pathlib.Path(builder.documents_path)
     
     visited = set()
-    queue = list(urls)
-    pages_count = 0
+    queue = []
+    for u in urls:
+        queue.append((u, True))
+    
+    external_pages_count = 0
 
     if allowed_urls:
         allowed_urls = {normalize_url(u) for u in allowed_urls}
         # Ensure initial URLs are always allowed
         allowed_urls.update({normalize_url(u) for u in urls})
 
-    while queue and pages_count < max_pages:
-        url = queue.pop(0)
+    while queue:
+        if stop_event and stop_event.is_set():
+            v_log("Stop requested, finalizing docset early...")
+            break
+
+        url, is_internal = queue.pop(0)
         norm_url = normalize_url(url)
         if norm_url in visited:
             v_log(f"Skipping already visited: {url}")
@@ -248,12 +262,19 @@ async def generate(urls, output, js=False, max_pages=None, progress_callback=Non
         if allowed_urls and norm_url not in allowed_urls:
             v_log(f"Skipping URL not in allowed list: {url}")
             continue
+        
+        # If it's external, check if we've reached the limit
+        # BUT: if it's explicitly allowed (e.g. via GUI selection), don't skip it.
+        if not is_internal and not (allowed_urls and norm_url in allowed_urls):
+            if external_pages_count >= max_pages:
+                v_log(f"Max external pages ({max_pages}) reached, skipping: {url}")
+                continue
 
         visited.add(norm_url)
         
-        v_log(f"Fetching and processing ({pages_count + 1}/{max_pages}): {url}")
+        v_log(f"Fetching and processing ({external_pages_count + 1 if not is_internal else 'internal'}/{max_pages if not is_internal else 'unlimited'}): {url}")
         if progress_callback:
-            progress_callback(pages_count, max_pages)
+            progress_callback(external_pages_count, max_pages)
         
         try:
             # Add retries for robustness
@@ -273,6 +294,9 @@ async def generate(urls, output, js=False, max_pages=None, progress_callback=Non
             log(f"Failed to fetch {url} after {max_retries} attempts: {e}")
             continue
 
+        if not is_internal:
+            external_pages_count += 1
+
         if not builder.has_icon:
             favicon_url = get_favicon_url(result.html, url)
             await builder.set_icon(favicon_url)
@@ -280,7 +304,6 @@ async def generate(urls, output, js=False, max_pages=None, progress_callback=Non
         # Link discovery and rewriting
         soup = BeautifulSoup(result.html, "lxml")
         current_url = result.url
-        base_parsed = urlparse(current_url)
 
         # Discovery of links in <a> tags and <iframe> src
         links_to_process = []
@@ -307,36 +330,49 @@ async def generate(urls, output, js=False, max_pages=None, progress_callback=Non
             else:
                 anchor = next_url.split("#")[1] if "#" in next_url else None
             
-            next_parsed = urlparse(clean_url)
-            next_domain = clean_domain(next_parsed.netloc)
+            norm_clean_url = normalize_url(clean_url)
             
             # Decision to follow link:
             # 1. If it's explicitly in allowed_urls
             # 2. OR if it matches the domain/path heuristic (stay within same documentation)
-            is_allowed = bool(allowed_urls and normalize_url(clean_url) in allowed_urls)
-            is_within_doc = is_url_within_doc(clean_url, urls)
+            # 3. OR if we are on an internal page and have budget for external ones (CLI discovery)
+            is_allowed = bool(allowed_urls and norm_clean_url in allowed_urls)
+            is_next_internal = is_url_within_doc(clean_url, urls)
             
+            # If we have an allowed_urls list (from GUI), only follow links in that list
+            # regardless of whether they are internal or not.
+            if allowed_urls:
+                should_localize = is_allowed
+            else:
+                should_localize = is_next_internal or (is_internal and external_pages_count < max_pages)
+
             next_url_is_same_page = False
             
             # Check if next_url is the same page as current_url (ignoring fragment)
             if clean_url.split("#")[0] == current_url.split("#")[0]:
                 next_url_is_same_page = True
 
-            if is_allowed or is_within_doc:
+            if should_localize:
                 if next_url_is_same_page and anchor and element.name == "a":
                     element[attr] = f"#{anchor}"
                 else:
                     local_name = get_filename_from_url(clean_url)
                     element[attr] = f"{local_name}#{anchor}" if anchor else local_name
                 
-                # Use normalized URL for checking visited/queue to be consistent
-                norm_clean_url = normalize_url(clean_url)
-                # But we still need the actual URL to fetch it
-                if norm_clean_url not in visited and norm_clean_url not in queue:
-                     # Only follow links that are allowed or within doc
-                     if is_allowed or is_within_doc:
-                        v_log(f"Added link to queue: {clean_url}")
-                        queue.append(clean_url)
+                # Check if we should add it to the queue
+                if norm_clean_url not in visited:
+                    already_in_queue = any(normalize_url(q_url) == norm_clean_url for q_url, _ in queue)
+                    if not already_in_queue:
+                        if is_next_internal:
+                            # Even if internal, if we have allowed_urls, we only follow if it's in there
+                            if not allowed_urls or is_allowed:
+                                v_log(f"Added internal link to queue: {clean_url}")
+                                queue.append((clean_url, True))
+                        elif is_internal:
+                             # Only follow external links if found on an internal page
+                             if is_allowed or (not allowed_urls and external_pages_count < max_pages):
+                                v_log(f"Added external link to queue: {clean_url}")
+                                queue.append((clean_url, False))
             else:
                 # If it's not within doc and not allowed, at least make it absolute if it was relative
                 # so it doesn't break in the flat docset structure.
@@ -389,6 +425,6 @@ async def generate(urls, output, js=False, max_pages=None, progress_callback=Non
                 break
 
     if progress_callback:
-        progress_callback(pages_count, max_pages)
+        progress_callback(external_pages_count, max_pages)
 
     builder.finalize()
