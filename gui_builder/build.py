@@ -43,28 +43,6 @@ def build():
         f"{os.path.join(project_root, 'src', 'docugen')}{os.pathsep}docugen",
     ]
 
-    if sys.platform == "darwin":
-        PLAYWRIGHT_BROWSERS = os.path.expanduser(
-            "~/Library/Caches/ms-playwright"
-        )
-    elif sys.platform.startswith("linux"):
-        PLAYWRIGHT_BROWSERS = os.path.expanduser(
-            "~/.cache/ms-playwright"
-        )
-    elif sys.platform == "win32":
-        PLAYWRIGHT_BROWSERS = os.path.join(
-            os.environ.get("LOCALAPPDATA", ""),
-            "ms-playwright",
-        )
-    else:
-        PLAYWRIGHT_BROWSERS = None
-
-    if PLAYWRIGHT_BROWSERS and os.path.exists(PLAYWRIGHT_BROWSERS):
-        cmd.extend([
-            "--collect-all", "playwright",
-            "--add-data",
-            f"{PLAYWRIGHT_BROWSERS}{os.pathsep}ms-playwright",
-        ])
 
     if icon_path and os.path.isfile(icon_path):
         cmd.extend(["--icon", icon_path])

@@ -1,113 +1,125 @@
-# DocuGen
+# 🛠️ DocuGen
 
-DocuGen is a powerful, Python-based tool designed to generate [Zeal](https://zealdocs.org/) (and Dash) compatible docsets from any website or online documentation. It features a modern Qt6-based GUI and a versatile CLI, with built-in support for modern, JavaScript-heavy documentation sites.
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Built with PySide6](https://img.shields.io/badge/UI-PySide6-green.svg)](https://www.qt.io/qt-for-python)
 
-## Features
+**DocuGen** is a high-performance, professional tool for generating [Zeal](https://zealdocs.org/) and [Dash](https://kapeli.com/dash) compatible docsets from any website or online documentation. It combines a modern Qt6 graphical interface with a powerful CLI, featuring advanced JavaScript rendering and smart asset localization.
 
-- **Initial URL Scan**: Automatically discovers reachable links and subdomains before starting the full generation.
-- **Granular URL Selection**: A two-pane selection dialog allows you to choose exactly which subpages or external links to include in your final docset.
-- **Multiple JS Rendering Engines**:
-    - **Playwright**: Uses Chromium for heavy-duty, accurate rendering of complex web apps.
-    - **QtWebEngine**: A built-in, lightweight alternative using PySide6's native WebEngine, featuring "Stability Polling" to ensure dynamic content is fully loaded.
-- **Smart Asset Handling**: Downloads and localizes CSS, JS, images (including `srcset` and CSS `url()` references), and favicons.
-- **Built-in Parsers**: Specialized parsers for common documentation formats:
-    - Sphinx
-    - Docusaurus
-    - Rustdoc
-    - Generic HTML (with smart title and symbol extraction)
-- **Robustness**: Automatic retries with exponential backoff for network-resilient fetching.
-- **Clean Naming**: Generates clean, human-readable filenames and docset names, automatically stripping redundant `www.` and TLDs while preserving the core domain identity.
+---
 
-## Installation
+## 🚀 Key Features
+
+-   **Intelligent URL Discovery**: Automatically scans for reachable links, subdomains, and assets before generation begins.
+-   **Granular Control**: A refined two-pane selection system allows you to pick exactly which pages and external links to include.
+-   **Hybrid JS Rendering Engines**:
+    -   **Playwright (Chromium)**: For heavy-duty, pixel-perfect rendering of complex SPAs.
+    -   **QtWebEngine**: Integrated, lightweight engine with "Stability Polling" to ensure dynamic content is fully loaded.
+-   **Deep Asset Localization**: Downloads and rewrites CSS, JS, images (including `srcset` and `url()` references), and favicons for complete offline usage.
+-   **First-Class Parser Support**: Specialized logic for common documentation platforms:
+    -   **Sphinx**, **Docusaurus**, **Rustdoc**, and **Generic HTML**.
+-   **Resilient Networking**: Built-in exponential backoff and automatic retries for stable downloads on unstable connections.
+-   **Professional Output**: Automatically generates clean, human-readable docset names and structures.
+
+## 📦 Installation
 
 ### Prerequisites
 
-- Python 3.11 or higher
-- [uv](https://github.com/astral-sh/uv) (recommended) or pip
+-   **Python 3.11 or higher**
+-   **[uv](https://github.com/astral-sh/uv)** (Recommended for dependency management)
 
-### Setup
+### Quick Start
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/youruser/docsetGenerator.git
-   cd docsetGenerator
-   ```
+1.  **Clone the Repository**
+    ```bash
+    git clone https://github.com/grahamhill/docsetGenerator.git
+    cd docsetGenerator
+    ```
 
-2. Install dependencies and activate environment:
-   ```bash
-   uv venv
-   source .venv/bin/activate
-   uv sync
-   # OR
-   python3 -m venv .venv
-   source .venv/bin/activate
-   pip install .
-   ```
+2.  **Environment Setup**
 
-3. (Optional) If you plan to use the Playwright engine:
-   ```bash
-   playwright install chromium
-   ```
+    Using `uv` (recommended):
+    ```bash
+    uv venv
+    source .venv/bin/activate
+    uv sync
+    ```
 
-## Usage
+    Using `pip`:
+    ```bash
+    python -m venv .venv
+    source .venv/bin/activate
+    pip install .
+    ```
 
-### GUI Mode
+3.  **Install Playwright Browsers** (Required for the Playwright engine):
+    ```bash
+    playwright install chromium
+    ```
 
-To launch the graphical interface, simply run the main entry point without arguments:
+## 🛠 Usage
+
+### 🖥 Graphical Interface (GUI)
+
+Launch the modern desktop application for an interactive experience:
 
 ```bash
 docugen
 ```
 
-1. **Enter URLs**: Provide one or more base documentation URLs.
-2. **Configure Options**: Choose your JS engine (Playwright, Qt, or None for static sites) and set the maximum page limit.
-3. **Scan**: Click "Generate Docset" to perform an initial scan.
-4. **Select**: Use the two-pane dialog to include/exclude discovered subpages.
-5. **Save**: Choose your output destination (it will automatically suggest a `.docset` name).
+1.  **Source URLs**: Enter one or more base documentation URLs.
+2.  **Engine Selection**: Choose between Playwright (best for JS), QtWebEngine, or None (fastest for static sites).
+3.  **Discovery Scan**: Run the initial scan to map the site structure.
+4.  **Refine Selection**: Use the selection dialog to include/exclude specific sections.
+5.  **Build**: Choose your output directory and generate your `.docset`.
 
-### CLI Mode
+### 💻 Command Line Interface (CLI)
 
-For automation, you can use the command-line interface:
+Perfect for automation and power users:
 
 ```bash
 docugen https://docs.python.org/3/ --out Python.docset --js --max-pages 500
 ```
 
-#### CLI Options:
-- `urls`: One or more source URLs.
-- `--out`: Path to the output `.docset` directory.
-- `--js`: Enable JavaScript rendering (uses Playwright by default).
-- `--max-pages`: Maximum number of pages to crawl (default: 250).
+#### CLI Options
 
-## Technical Details
+| Option | Shorthand | Description | Default |
+| :--- | :--- | :--- | :--- |
+| `urls` | | One or more source URLs (positional) | |
+| `--out` | | Path to the output `.docset` directory | **Required** |
+| `--js` | | Enable JavaScript rendering (Playwright) | `False` |
+| `--max-pages` | | Maximum number of pages to crawl | `250` |
+| `--verbose` | `-v` | Enable detailed logging | `False` |
+| `--force` | `-f` | Clear output directory and re-download assets | `False` |
 
-### Project Structure
+## 🏗 Technical Architecture
 
-- `src/docugen/core.py`: The main orchestration logic for scanning and generation.
-- `src/docugen/app.py`: PySide6 implementation of the GUI.
-- `src/docugen/fetch/`: Modular fetcher system (HTTPX, Playwright, QtWebEngine).
-- `src/docugen/parsers/`: Logic for identifying symbols and structure in different doc formats.
-- `src/docugen/assets/`: Asset discovery and rewriting engine.
-- `src/docugen/docset/`: Builder for the `.docset` folder structure and SQLite index.
+DocuGen is built with modularity and extensibility in mind:
 
-### Development and Testing
+-   **`core.py`**: The central engine managing the crawl and generation lifecycle.
+-   **`fetch/`**: Modular fetching system supporting standard HTTP, Playwright, and QtWebEngine.
+-   **`parsers/`**: Strategy-based parsers for different documentation styles.
+-   **`assets/`**: Advanced discovery and localization engine for offline assets.
+-   **`docset/`**: Builder for the standard `.docset` format and SQLite indexing.
 
-The project uses `pytest` for unit testing.
+## 🧪 Development & Testing
+
+We use `pytest` for ensuring stability across the toolchain.
 
 ```bash
-PYTHONPATH=src python3 -m unittest discover tests
+# Run all tests
+pytest tests/
+
+# Run with coverage (if installed)
+pytest --cov=src tests/
 ```
 
-## Documentation
+## 📄 License & Disclaimer
 
-For more detailed information, see the [docs](docs/index.md) directory:
+Distributed under the **GPLv3 License**. See `LICENSE` for more information.
 
-- [Architecture](docs/architecture.md)
-- [Frontpage Handling](docs/frontpage_handling.md)
+### Note on Content Licensing
+Docsets generated by DocuGen are subject to the license of the original source content. Users are responsible for ensuring their use of generated docsets complies with the original content's licensing terms. Generated docsets are intended for personal reference and offline documentation access.
 
-## License
-
-This project is licensed under the GPLv3 License - see the [LICENSE](LICENSE) file for details.
-
-**Important Note on Output Licensing:**
-The docsets generated by DocuGen are licensed under whatever the original product or website owner(s) licensed the source content under. The generated content is provided for reference purposes only and is not intended for sales or any other use case.
+---
+*Maintained by [grahamhill](https://github.com/grahamhill)*
