@@ -1,5 +1,5 @@
 from .base import Fetcher, FetchResult
-
+import anyio
 
 class PlaywrightFetcher(Fetcher):
     async def fetch(self, url: str) -> FetchResult:
@@ -29,42 +29,38 @@ class PlaywrightFetcher(Fetcher):
                     async def intercept_route(route):
                         try:
                             try:
-                                response = await route.fetch()
+                                # response = await route.fetch()
+                                # Using fetch() might be hanging if the resource is huge or the server is slow
+                                # Let's only continue if it's not a WASM file we want to intercept
+                                if ".wasm" in route.request.url.split('?')[0]:
+                                    response = await route.fetch()
+                                    body = await response.body()
+                                    # Store with absolute URL
+                                    wasm_binaries[route.request.url] = body
+                                    
+                                    # If the server returned wrong MIME type, fix it for the browser
+                                    headers = response.headers.copy()
+                                    if "application/wasm" not in headers.get("content-type", "").lower():
+                                        headers["content-type"] = "application/wasm"
+                                        try:
+                                            await route.fulfill(
+                                                response=response,
+                                                headers=headers,
+                                                body=body
+                                            )
+                                            return
+                                        except Exception:
+                                            pass
+                                else:
+                                    await route.continue_()
+                                    return
                             except Exception:
                                 # Page or context might have closed
-                                return
-
-                            if ".wasm" in route.request.url.split('?')[0]:
                                 try:
-                                    body = await response.body()
-                                except Exception:
-                                    # Response might be gone
-                                    try:
-                                        await route.continue_()
-                                    except:
-                                        pass
-                                    return
-
-                                # Store with absolute URL
-                                wasm_binaries[route.request.url] = body
-                                
-                                # If the server returned wrong MIME type, fix it for the browser
-                                headers = response.headers.copy()
-                                if "application/wasm" not in headers.get("content-type", "").lower():
-                                    headers["content-type"] = "application/wasm"
-                                    try:
-                                        await route.fulfill(
-                                            response=response,
-                                            headers=headers,
-                                            body=body
-                                        )
-                                        return
-                                    except Exception:
-                                        pass
-                            try:
-                                await route.continue_()
-                            except Exception:
-                                pass
+                                    await route.continue_()
+                                except:
+                                    pass
+                                return
                         except Exception:
                             pass
 
@@ -133,7 +129,7 @@ class PlaywrightFetcher(Fetcher):
                                     window.scrollBy(0, distance);
                                     totalHeight += distance;
 
-                                    if(totalHeight >= scrollHeight){
+                                    if(totalHeight >= scrollHeight || totalHeight > 10000){ // Cap scrolling
                                         clearInterval(timer);
                                         resolve();
                                     }
@@ -151,7 +147,11 @@ class PlaywrightFetcher(Fetcher):
                         
                         # Heuristic: skip very small iframes (likely ads, trackers, or widgets)
                         # or iframes without a name/id unless they look like content
-                        frame_name = frame.name.lower()
+                        try:
+                            frame_name = frame.name.lower()
+                        except:
+                            frame_name = ""
+                            
                         if not frame_name and frame.frame_element:
                             try:
                                 frame_name = (await frame.frame_element.get_attribute("id") or "").lower()
@@ -165,8 +165,17 @@ class PlaywrightFetcher(Fetcher):
                         if is_likely_content or not frame_name:
                             try:
                                 # Wait for some content to be present in the iframe
-                                await frame.wait_for_load_state("networkidle", timeout=2000)
-                                iframe_content = await frame.content()
+                                try:
+                                    async with anyio.fail_after(5):
+                                        await frame.wait_for_load_state("networkidle", timeout=5000)
+                                except Exception:
+                                    pass
+                                
+                                try:
+                                    async with anyio.fail_after(5):
+                                        iframe_content = await frame.content()
+                                except Exception:
+                                    continue
                                 
                                 # Inject iframe body into the main page so it's crawlable/indexable
                                 await page.evaluate("""
@@ -188,30 +197,24 @@ class PlaywrightFetcher(Fetcher):
                     last_html_len = 0
                     stable_count = 0
                     max_stability_checks = 15
-                    for _ in range(max_stability_checks):
-                        html = await page.content()
-                        
-                        # Consider all frames for stability
-                        for frame in page.frames:
-                            if frame == page.main_frame:
-                                continue
-                            try:
-                                f_html = await frame.content()
-                                html += f_html
-                            except:
-                                pass
-
-                        current_len = len(html)
-                        if current_len > 0 and current_len == last_html_len:
-                            stable_count += 1
-                        else:
-                            stable_count = 0
-                            last_html_len = current_len
-                        
-                        if stable_count >= 3:
+                    for i in range(max_stability_checks):
+                        try:
+                            # Use a simpler/faster way to check stability if content() is slow
+                            current_len = await page.evaluate("() => document.documentElement.outerHTML.length")
+                            
+                            if current_len > 0 and current_len == last_html_len:
+                                stable_count += 1
+                            else:
+                                stable_count = 0
+                                last_html_len = current_len
+                            
+                            if stable_count >= 3:
+                                break
+                        except Exception:
                             break
+                        
                         await page.wait_for_timeout(1000)
-
+                    
                     html = await page.content()
 
                     # Embed collected WASM binaries into the HTML
