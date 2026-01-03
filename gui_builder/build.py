@@ -73,7 +73,6 @@ def build():
         cmd.extend([
             "--osx-bundle-identifier",
             "com.yourdomain.docugen",
-            "--osx-bundle-version", "0.5.2",
         ])
 
 
