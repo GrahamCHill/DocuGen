@@ -20,6 +20,7 @@ class ScanWorker(QThread):
     finished = Signal(list)
     error = Signal(str)
     log = Signal(str)
+    verbose_log = Signal(str)
     progress = Signal(int, int)
 
     def __init__(self, urls, js, fetcher_type="playwright", verbose=False):
@@ -28,13 +29,30 @@ class ScanWorker(QThread):
         self.js = js
         self.fetcher_type = fetcher_type
         self.verbose = verbose
+        self.cancel_event = None
+
+    def stop(self):
+        if self.cancel_event:
+            self.cancel_event.set()
+
+    async def _run_scan(self):
+        self.cancel_event = anyio.Event()
+        
+        def report_progress(current, total):
+            self.progress.emit(current, total)
+
+        def log_wrapper(message, verbose_only=False):
+            if verbose_only:
+                self.verbose_log.emit(message)
+            else:
+                self.log.emit(message)
+
+        discovered = await scan(self.urls, self.js, DEFAULT_MAX_PAGES, report_progress, self.fetcher_type, log_wrapper, self.verbose, self.cancel_event)
+        return discovered
 
     def run(self):
         try:
-            def report_progress(current, total):
-                self.progress.emit(current, total)
-
-            discovered = anyio.run(scan, self.urls, self.js, DEFAULT_MAX_PAGES, report_progress, self.fetcher_type, self.log.emit, self.verbose)
+            discovered = anyio.run(self._run_scan)
             self.finished.emit(discovered)
         except Exception as e:
             self.error.emit(str(e))
@@ -43,6 +61,7 @@ class MultiWorker(QThread):
     finished = Signal()
     error = Signal(str)
     log = Signal(str)
+    verbose_log = Signal(str)
     progress = Signal(int, int)
 
     def __init__(self, docsets_to_generate, output_base, js, fetcher_type="playwright", verbose=False, force=False):
@@ -53,21 +72,38 @@ class MultiWorker(QThread):
         self.fetcher_type = fetcher_type
         self.verbose = verbose
         self.force = force
+        self.cancel_event = None
+
+    def stop(self):
+        if self.cancel_event:
+            self.cancel_event.set()
+
+    async def _run_generate(self):
+        self.cancel_event = anyio.Event()
+        total_docsets = len(self.docsets_to_generate)
+        for i, (name, urls, allowed_urls) in enumerate(self.docsets_to_generate):
+            if self.cancel_event.is_set():
+                break
+            
+            self.log.emit(f"Generating docset: {name} ({i+1}/{total_docsets})")
+            
+            docset_filename = name if name.endswith(".docset") else f"{name}.docset"
+            output_path = os.path.join(self.output_base, docset_filename)
+            
+            def report_progress(current, total):
+                self.progress.emit(current, total)
+
+            def log_wrapper(message, verbose_only=False):
+                if verbose_only:
+                    self.verbose_log.emit(message)
+                else:
+                    self.log.emit(message)
+
+            await generate(urls, output_path, self.js, DEFAULT_MAX_PAGES, report_progress, allowed_urls, self.fetcher_type, log_wrapper, self.verbose, self.force, self.cancel_event)
 
     def run(self):
         try:
-            total_docsets = len(self.docsets_to_generate)
-            for i, (name, urls, allowed_urls) in enumerate(self.docsets_to_generate):
-                self.log.emit(f"Generating docset: {name} ({i+1}/{total_docsets})")
-                
-                docset_filename = name if name.endswith(".docset") else f"{name}.docset"
-                output_path = os.path.join(self.output_base, docset_filename)
-                
-                def report_progress(current, total):
-                    self.progress.emit(current, total)
-
-                anyio.run(generate, urls, output_path, self.js, DEFAULT_MAX_PAGES, report_progress, allowed_urls, self.fetcher_type, self.log.emit, self.verbose, self.force)
-            
+            anyio.run(self._run_generate)
             self.finished.emit()
         except Exception as e:
             self.error.emit(str(e))
@@ -421,9 +457,6 @@ class MainWindow(QMainWindow):
 
         self.ignore_optional_checkbox = QCheckBox("Ignore Optional (Auto-generate)", checked=False)
         options_layout.addWidget(self.ignore_optional_checkbox)
-        
-        self.verbose_checkbox = QCheckBox("Verbose Logging", checked=False)
-        options_layout.addWidget(self.verbose_checkbox)
 
         self.force_checkbox = QCheckBox("Force Build", checked=False)
         options_layout.addWidget(self.force_checkbox)
@@ -441,14 +474,28 @@ class MainWindow(QMainWindow):
 
         # Logs
         layout.addWidget(QLabel("Logs:"))
+        self.log_tabs = QTabWidget()
+        
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
-        layout.addWidget(self.log_output)
+        self.log_tabs.addTab(self.log_output, "General")
+        
+        self.verbose_log_output = QTextEdit()
+        self.verbose_log_output.setReadOnly(True)
+        self.log_tabs.addTab(self.verbose_log_output, "Verbose")
+        
+        layout.addWidget(self.log_tabs)
 
         # Generate button
         self.generate_btn = QPushButton("Generate Docset")
         self.generate_btn.clicked.connect(self.start_generation)
         layout.addWidget(self.generate_btn)
+
+        # Stop button
+        self.stop_btn = QPushButton("Stop Processing")
+        self.stop_btn.clicked.connect(self.stop_processing)
+        self.stop_btn.setEnabled(False)
+        layout.addWidget(self.stop_btn)
 
         # Open Zeal Folder button
         self.open_zeal_btn = QPushButton("Open Zeal Docsets Folder")
@@ -511,7 +558,7 @@ class MainWindow(QMainWindow):
         self.output_base = self.out_input.text().strip()
         self.js = self.js_checkbox.isChecked()
         self.ignore_optional = self.ignore_optional_checkbox.isChecked()
-        self.verbose = self.verbose_checkbox.isChecked()
+        self.verbose = True # Always enable verbose logging since we have a tab for it
         self.force = self.force_checkbox.isChecked()
         self.engine = self.js_engine_combo.currentText()
 
@@ -523,12 +570,24 @@ class MainWindow(QMainWindow):
             return
 
         self.generate_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
         self.process_next_docset()
+
+    def stop_processing(self):
+        if hasattr(self, 'scan_worker') and self.scan_worker.isRunning():
+            self.scan_worker.stop()
+        if hasattr(self, 'worker') and self.worker.isRunning():
+            self.worker.stop()
+        
+        self.docsets_queue = []
+        self.stop_btn.setEnabled(False)
+        self.log_output.append('<br><font color="orange"><b>Stopping...</b></font>')
 
     def process_next_docset(self):
         if not self.docsets_queue:
             # All docsets processed message is now handled in on_generation_finished
             self.generate_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
             self.progress_bar.setVisible(False)
             return
 
@@ -542,10 +601,18 @@ class MainWindow(QMainWindow):
         self.scan_worker.error.connect(self.on_error)
         self.scan_worker.progress.connect(self.update_progress)
         self.scan_worker.log.connect(lambda m: self.log_output.append(m))
+        self.scan_worker.verbose_log.connect(lambda m: self.verbose_log_output.append(m))
         self.scan_worker.start()
 
     def on_scan_finished(self, discovered_urls):
         self.progress_bar.setVisible(False)
+        
+        # Check if it was cancelled
+        if hasattr(self, 'scan_worker') and self.scan_worker.cancel_event and self.scan_worker.cancel_event.is_set():
+            self.log_output.append('<br><font color="orange"><b>Scan stopped.</b></font>')
+            self.generate_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
+            return
         
         selected_urls = []
         root_urls = []
@@ -593,12 +660,22 @@ class MainWindow(QMainWindow):
         self.worker.error.connect(self.on_error)
         self.worker.progress.connect(self.update_progress)
         self.worker.log.connect(lambda m: self.log_output.append(m))
+        self.worker.verbose_log.connect(lambda m: self.verbose_log_output.append(m))
         self.worker.start()
 
     def on_generation_finished(self):
+        # Check if it was cancelled
+        if hasattr(self, 'worker') and self.worker.cancel_event and self.worker.cancel_event.is_set():
+            self.log_output.append('<br><font color="orange"><b>Generation stopped.</b></font>')
+            self.generate_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
+            self.progress_bar.setVisible(False)
+            return
+
         self.log_output.append(f"Finished generating {self.current_docset['name']}.")
         if not self.docsets_queue:
             self.log_output.append('<br><font color="green"><b>Done: Docset(s) generated successfully.</b></font>')
+            self.stop_btn.setEnabled(False)
         self.process_next_docset()
 
     def update_progress(self, current, total):
@@ -607,6 +684,7 @@ class MainWindow(QMainWindow):
 
     def on_error(self, message):
         self.generate_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
         self.log_output.append(f'<br><font color="red"><b>Error: {message}</b></font>')
 
 def main():

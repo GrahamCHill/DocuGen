@@ -30,7 +30,10 @@ class DocsetBuilder:
         if verbose_only and not self.verbose:
             return
         if self.log_callback:
-            self.log_callback(message)
+            try:
+                self.log_callback(message, verbose_only=verbose_only)
+            except TypeError:
+                self.log_callback(message)
         else:
             print(message)
 

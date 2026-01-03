@@ -75,7 +75,7 @@ def is_url_within_doc(url, start_urls, related_patterns=None):
     
     return False
 
-async def scan(urls, js=False, max_pages=None, progress_callback=None, fetcher_type="playwright", log_callback=None, verbose=False):
+async def scan(urls, js=False, max_pages=None, progress_callback=None, fetcher_type="playwright", log_callback=None, verbose=False, cancel_event=None):
     if max_pages is None:
         max_pages = DEFAULT_MAX_PAGES
     
@@ -83,7 +83,10 @@ async def scan(urls, js=False, max_pages=None, progress_callback=None, fetcher_t
         if verbose_only and not verbose:
             return
         if log_callback:
-            log_callback(message)
+            try:
+                log_callback(message, verbose_only=verbose_only)
+            except TypeError:
+                log_callback(message)
         else:
             print(message)
 
@@ -103,6 +106,10 @@ async def scan(urls, js=False, max_pages=None, progress_callback=None, fetcher_t
     pages_count = 0
 
     while queue and pages_count < max_pages:
+        if cancel_event and cancel_event.is_set():
+            log("Scan cancelled by user.")
+            break
+
         url = queue.pop(0)
         norm_url = normalize_url(url)
         if norm_url in visited:
@@ -179,7 +186,7 @@ async def scan(urls, js=False, max_pages=None, progress_callback=None, fetcher_t
 
     return sorted(list(discovered))
 
-async def generate(urls, output, js=False, max_pages=None, progress_callback=None, allowed_urls=None, fetcher_type="playwright", log_callback=None, verbose=False, force=False):
+async def generate(urls, output, js=False, max_pages=None, progress_callback=None, allowed_urls=None, fetcher_type="playwright", log_callback=None, verbose=False, force=False, cancel_event=None):
     if max_pages is None:
         max_pages = DEFAULT_MAX_PAGES
 
@@ -187,7 +194,10 @@ async def generate(urls, output, js=False, max_pages=None, progress_callback=Non
         if verbose_only and not verbose:
             return
         if log_callback:
-            log_callback(message)
+            try:
+                log_callback(message, verbose_only=verbose_only)
+            except TypeError:
+                log_callback(message)
         else:
             print(message)
 
@@ -219,6 +229,10 @@ async def generate(urls, output, js=False, max_pages=None, progress_callback=Non
         allowed_urls.update({normalize_url(u) for u in urls})
 
     while queue and pages_count < max_pages:
+        if cancel_event and cancel_event.is_set():
+            log("Generation cancelled by user.")
+            break
+
         url = queue.pop(0)
         norm_url = normalize_url(url)
         if norm_url in visited:

@@ -11,7 +11,10 @@ async def rewrite_assets(html, base_url, out_dir, force=False, verbose=False, lo
     def log(msg):
         if verbose:
             if log_callback:
-                log_callback(msg)
+                try:
+                    log_callback(msg, verbose_only=True)
+                except TypeError:
+                    log_callback(msg)
             else:
                 print(msg)
 
@@ -205,6 +208,16 @@ async def rewrite_css_assets(client, css_path, base_url, out_dir, force=False, v
     if not css_path.exists():
         return
     
+    def log(msg):
+        if verbose:
+            if log_callback:
+                try:
+                    log_callback(msg, verbose_only=True)
+                except TypeError:
+                    log_callback(msg)
+            else:
+                print(msg)
+
     content = css_path.read_text(errors='ignore')
     # Find url(...) in CSS
     urls = re.findall(r'url\([\'"]?(.*?)[\'"]?\)', content)
@@ -230,7 +243,10 @@ async def download_and_save_asset(client, url, out_dir, tag, force=False, verbos
     def log(msg):
         if verbose:
             if log_callback:
-                log_callback(msg)
+                try:
+                    log_callback(msg, verbose_only=True)
+                except TypeError:
+                    log_callback(msg)
             else:
                 print(msg)
     try:
