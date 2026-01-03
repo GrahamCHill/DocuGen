@@ -17,3 +17,5 @@
 /build
 
 docTest/SDL3.docset.links.txt
+/gui_builder/build
+/gui_builder/dist
