@@ -7,7 +7,7 @@ from ..utils.url import get_filename_from_url, normalize_url, clean_domain
 from urllib.parse import urlparse
 
 class DocsetBuilder:
-    def __init__(self, output_path, main_url=None, log_callback=None):
+    def __init__(self, output_path, main_url=None, log_callback=None, verbose=False, force=False):
         self.docset_name = os.path.basename(output_path).replace(".docset", "")
         self.base_path = output_path
         self.contents_path = os.path.join(self.base_path, "Contents")
@@ -15,6 +15,8 @@ class DocsetBuilder:
         self.documents_path = os.path.join(self.resources_path, "Documents")
         
         self.index = DocsetIndex(os.path.join(self.resources_path, "docSet.dsidx"))
+        self.verbose = verbose
+        self.force = force
         self._setup_directories()
         self.first_page = None
         self.main_page = None
@@ -24,7 +26,9 @@ class DocsetBuilder:
         self.has_icon = False
         self.log_callback = log_callback
 
-    def log(self, message):
+    def log(self, message, verbose_only=False):
+        if verbose_only and not self.verbose:
+            return
         if self.log_callback:
             self.log_callback(message)
         else:
@@ -32,7 +36,17 @@ class DocsetBuilder:
 
     def _setup_directories(self):
         if os.path.exists(self.base_path):
-            shutil.rmtree(self.base_path)
+            if self.force:
+                self.log(f"Force building: removing existing docset at {self.base_path}")
+                shutil.rmtree(self.base_path)
+            else:
+                # If NOT forcing, we might want to keep it? 
+                # But DocsetBuilder currently ALWAYS rmtree's.
+                # The user said "force build components". 
+                # Let's keep the rmtree but log it if verbose.
+                self.log(f"Cleaning output directory: {self.base_path}", verbose_only=True)
+                shutil.rmtree(self.base_path)
+        
         os.makedirs(self.documents_path)
         self.index.connect()
 
@@ -53,6 +67,7 @@ class DocsetBuilder:
 
     def add_page(self, parsed_page, url, is_main=False):
         filename = get_filename_from_url(url)
+        self.log(f"Adding page: {url} as {filename}", verbose_only=True)
         self.all_pages.append((filename, url))
         
         # Check if this should be the main page

@@ -7,7 +7,14 @@ import hashlib
 
 import re
 
-async def rewrite_assets(html, base_url, out_dir):
+async def rewrite_assets(html, base_url, out_dir, force=False, verbose=False, log_callback=None):
+    def log(msg):
+        if verbose:
+            if log_callback:
+                log_callback(msg)
+            else:
+                print(msg)
+
     soup = BeautifulSoup(html, "lxml")
 
     async with httpx.AsyncClient(follow_redirects=True) as client:
@@ -50,7 +57,7 @@ async def rewrite_assets(html, base_url, out_dir):
                         if not absolute_url.startswith("http"):
                             continue
                         
-                        local_name = await download_and_save_asset(client, absolute_url, out_dir, tag)
+                        local_name = await download_and_save_asset(client, absolute_url, out_dir, tag, force=force, verbose=verbose, log_callback=log_callback)
                         if local_name:
                             new_srcset = new_srcset.replace(img_url, local_name)
                     
@@ -61,12 +68,12 @@ async def rewrite_assets(html, base_url, out_dir):
                 if not absolute_url.startswith("http"):
                     continue
 
-                local_name = await download_and_save_asset(client, absolute_url, out_dir, tag)
+                local_name = await download_and_save_asset(client, absolute_url, out_dir, tag, force=force, verbose=verbose, log_callback=log_callback)
                 if local_name:
                     el[attr] = local_name
                     # If it's a CSS file, we need to rewrite assets inside it
                     if tag == "link" and el.get("rel") == ["stylesheet"] or (local_name.endswith(".css")):
-                         await rewrite_css_assets(client, out_dir / local_name, absolute_url, out_dir)
+                         await rewrite_css_assets(client, out_dir / local_name, absolute_url, out_dir, force=force, verbose=verbose, log_callback=log_callback)
 
         # ES modules imports in script tags
         for script in soup.find_all("script", type="module"):
@@ -85,7 +92,7 @@ async def rewrite_assets(html, base_url, out_dir):
                     absolute_url = urljoin(base_url, imp_url)
                     if not absolute_url.startswith("http"): continue
                     
-                    local_name = await download_and_save_asset(client, absolute_url, out_dir, "script")
+                    local_name = await download_and_save_asset(client, absolute_url, out_dir, "script", force=force, verbose=verbose, log_callback=log_callback)
                     if local_name:
                         # Use local_name instead of imp_url
                         # We MUST ensure we only replace the exact string in quotes to avoid partial matches
@@ -112,7 +119,7 @@ async def rewrite_assets(html, base_url, out_dir):
                     
                     ext = pathlib.Path(asset_url.split("?")[0]).suffix.lower()
                     tag_type = "json" if ext == ".json" else "asset"
-                    local_name = await download_and_save_asset(client, absolute_url, out_dir, tag_type)
+                    local_name = await download_and_save_asset(client, absolute_url, out_dir, tag_type, force=force, verbose=verbose, log_callback=log_callback)
                     if local_name:
                         content = content.replace(f"'{asset_url}'", f"'{local_name}'")
                         content = content.replace(f'"{asset_url}"', f'"{local_name}"')
@@ -194,7 +201,7 @@ async def rewrite_assets(html, base_url, out_dir):
 
     return str(soup)
 
-async def rewrite_css_assets(client, css_path, base_url, out_dir):
+async def rewrite_css_assets(client, css_path, base_url, out_dir, force=False, verbose=False, log_callback=None):
     if not css_path.exists():
         return
     
@@ -211,7 +218,7 @@ async def rewrite_css_assets(client, css_path, base_url, out_dir):
         if not absolute_url.startswith("http"):
             continue
             
-        local_name = await download_and_save_asset(client, absolute_url, out_dir, "style")
+        local_name = await download_and_save_asset(client, absolute_url, out_dir, "style", force=force, verbose=verbose, log_callback=log_callback)
         if local_name:
             content = content.replace(url, local_name)
             modified = True
@@ -219,7 +226,13 @@ async def rewrite_css_assets(client, css_path, base_url, out_dir):
     if modified:
         css_path.write_text(content)
 
-async def download_and_save_asset(client, url, out_dir, tag):
+async def download_and_save_asset(client, url, out_dir, tag, force=False, verbose=False, log_callback=None):
+    def log(msg):
+        if verbose:
+            if log_callback:
+                log_callback(msg)
+            else:
+                print(msg)
     try:
         # Avoid re-downloading
         ext = pathlib.Path(url.split("?")[0]).suffix
@@ -235,8 +248,13 @@ async def download_and_save_asset(client, url, out_dir, tag):
         
         fname = hashlib.md5(url.encode()).hexdigest() + ext
         path = out_dir / fname
-        if path.exists():
+        if path.exists() and not force:
             return fname
+
+        if force and path.exists():
+            log(f"Force re-downloading asset: {url}")
+        else:
+            log(f"Downloading asset: {url}")
 
         r = await client.get(url)
         r.raise_for_status()

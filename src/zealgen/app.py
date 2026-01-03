@@ -22,18 +22,19 @@ class ScanWorker(QThread):
     log = Signal(str)
     progress = Signal(int, int)
 
-    def __init__(self, urls, js, fetcher_type="playwright"):
+    def __init__(self, urls, js, fetcher_type="playwright", verbose=False):
         super().__init__()
         self.urls = urls
         self.js = js
         self.fetcher_type = fetcher_type
+        self.verbose = verbose
 
     def run(self):
         try:
             def report_progress(current, total):
                 self.progress.emit(current, total)
 
-            discovered = anyio.run(scan, self.urls, self.js, DEFAULT_MAX_PAGES, report_progress, self.fetcher_type, self.log.emit)
+            discovered = anyio.run(scan, self.urls, self.js, DEFAULT_MAX_PAGES, report_progress, self.fetcher_type, self.log.emit, self.verbose)
             self.finished.emit(discovered)
         except Exception as e:
             self.error.emit(str(e))
@@ -44,12 +45,14 @@ class MultiWorker(QThread):
     log = Signal(str)
     progress = Signal(int, int)
 
-    def __init__(self, docsets_to_generate, output_base, js, fetcher_type="playwright"):
+    def __init__(self, docsets_to_generate, output_base, js, fetcher_type="playwright", verbose=False, force=False):
         super().__init__()
         self.docsets_to_generate = docsets_to_generate
         self.output_base = output_base
         self.js = js
         self.fetcher_type = fetcher_type
+        self.verbose = verbose
+        self.force = force
 
     def run(self):
         try:
@@ -63,7 +66,7 @@ class MultiWorker(QThread):
                 def report_progress(current, total):
                     self.progress.emit(current, total)
 
-                anyio.run(generate, urls, output_path, self.js, DEFAULT_MAX_PAGES, report_progress, allowed_urls, self.fetcher_type, self.log.emit)
+                anyio.run(generate, urls, output_path, self.js, DEFAULT_MAX_PAGES, report_progress, allowed_urls, self.fetcher_type, self.log.emit, self.verbose, self.force)
             
             self.finished.emit()
         except Exception as e:
@@ -419,6 +422,12 @@ class MainWindow(QMainWindow):
         self.ignore_optional_checkbox = QCheckBox("Ignore Optional (Auto-generate)", checked=False)
         options_layout.addWidget(self.ignore_optional_checkbox)
         
+        self.verbose_checkbox = QCheckBox("Verbose Logging", checked=False)
+        options_layout.addWidget(self.verbose_checkbox)
+
+        self.force_checkbox = QCheckBox("Force Build", checked=False)
+        options_layout.addWidget(self.force_checkbox)
+        
         options_layout.addWidget(QLabel("JS Engine:"))
         self.js_engine_combo = QComboBox()
         self.js_engine_combo.addItems(["playwright", "qt"])
@@ -502,6 +511,8 @@ class MainWindow(QMainWindow):
         self.output_base = self.out_input.text().strip()
         self.js = self.js_checkbox.isChecked()
         self.ignore_optional = self.ignore_optional_checkbox.isChecked()
+        self.verbose = self.verbose_checkbox.isChecked()
+        self.force = self.force_checkbox.isChecked()
         self.engine = self.js_engine_combo.currentText()
 
         if not self.docsets_queue:
@@ -526,7 +537,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
         
-        self.scan_worker = ScanWorker([self.current_docset['url']], self.js, self.engine)
+        self.scan_worker = ScanWorker([self.current_docset['url']], self.js, self.engine, self.verbose)
         self.scan_worker.finished.connect(self.on_scan_finished)
         self.scan_worker.error.connect(self.on_error)
         self.scan_worker.progress.connect(self.update_progress)
@@ -577,7 +588,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(True)
 
         # We use MultiWorker even for a single docset to keep it simple
-        self.worker = MultiWorker([(name, urls, selected_urls)], self.output_base, self.js, self.engine)
+        self.worker = MultiWorker([(name, urls, selected_urls)], self.output_base, self.js, self.engine, self.verbose, self.force)
         self.worker.finished.connect(self.on_generation_finished)
         self.worker.error.connect(self.on_error)
         self.worker.progress.connect(self.update_progress)
